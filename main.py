@@ -1,8 +1,10 @@
 #MAIN FUNCTION
 
 #IMPORTS
+import csv
 from get_list_of_kalshi_games import get_list_of_all_kalshi_college_basketball_games
 from get_list_of_espn_games import get_list_of_all_espn_college_basketball_games
+from kalshi_espn_game_mapper import map_espn_kalshi_games
 from get_espn_game_timestamp_mapings import get_espn_game_timestamp_mapping
 
 #GET LIST OF ALL KALSHI CLOSED MARKET COLLEGE BASKETBALL GAMES
@@ -12,7 +14,18 @@ kalshi_games_list = get_list_of_all_kalshi_college_basketball_games()
 espn_games_list = get_list_of_all_espn_college_basketball_games()
 
 #CREATE A CSV FILE THAT MAPS OF KALSHI GAME ID TO ESPN GAME ID
-map_espn_kalshi_games()
+mapped_games = map_espn_kalshi_games()
+
+print(mapped_games)
+print(type(mapped_games))
+
+with open("team_mapping.csv", mode="w", newline="") as file:
+    writer = csv.DictWriter(file, fieldnames=["kalshi_id", "espn_id"])
+    
+    for kalshi_id, espn_id in mapped_games.items():
+        writer.writerow({'kalshi_id': kalshi_id, 'espn_id': espn_id})
+
+print("CSV saved as team_mapping.csv")
 
 #FOR EACH KALSHI GAME THAT IS ALSO IN ESPN GAME
 
