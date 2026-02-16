@@ -40,8 +40,11 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
     result = market_info["result"]
 
     # Convert to unix timestamps
-    start_ts = int(open_time.timestamp())
+    #start_ts = int(open_time.timestamp())
+    #end_ts = int(close_time.timestamp())
+
     end_ts = int(close_time.timestamp())
+    start_ts = end_ts - (6 * 3600)  # 6 hours in seconds
 
     logger.info(f"Market {market_ticker}: {open_time} → {close_time}, result={result}")
 
