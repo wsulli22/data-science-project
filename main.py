@@ -10,14 +10,13 @@ from get_espn_game_timestamp_mapings import get_espn_game_timestamp_mapping
 from get_kalshi_game_data import get_kalshi_game_data
 
 #GET LIST OF ALL KALSHI CLOSED MARKET COLLEGE BASKETBALL GAMES
-#kalshi_games_list = get_list_of_all_kalshi_college_basketball_games()
+kalshi_games_list = get_list_of_all_kalshi_college_basketball_games()
 
 #GET LIST OF ALL ESPN COMPLETED COLLEGE BASKETBALL GAMES
-#espn_games_list = get_list_of_all_espn_college_basketball_games()
+espn_games_list = get_list_of_all_espn_college_basketball_games()
 
 #CREATE A CSV FILE THAT MAPS OF KALSHI GAME ID TO ESPN GAME ID
-#mapped_games = map_espn_kalshi_games()
-mapped_games = {'KXNCAAMBGAME-25NOV03LEHHOU': '401824809', 'KXNCAAMBGAME-25NOV03ARIZFLA': '401826885', 'KXNCAAMBGAME-25NOV03NHCCONN': '401812785', 'KXNCAAMBGAME-25NOV03QUINSJU': '401820577', 'KXNCAAMBGAME-25NOV03OAKMICH': '401826083', 'KXNCAAMBGAME-25NOV03VILLBYU': '401819834', 'KXNCAAMBGAME-25NOV03SCSTLOU': '401817239', 'KXNCAAMBGAME-25NOV03EWUUCLA': '401813756', 'KXNCAAMBGAME-25NOV03SOUARK': '401826784', 'KXNCAAMBGAME-25NOV03UNDALA': '401812260'}
+mapped_games = map_espn_kalshi_games()
 
 with open("team_mapping.csv", mode="w", newline="") as file:
     writer = csv.DictWriter(file, fieldnames=["kalshi_id", "espn_id"])
