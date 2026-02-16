@@ -46,7 +46,6 @@ for kalshi_id, espn_game_id in mapped_games.items():
                 break
 
     team = line.split(",")[1]
-    print("HERE", team)
     kalshi_df = get_kalshi_game_data(kalshi_id, team)
     kalshi_df['wallclock_ts'] = pd.to_datetime(kalshi_df['wallclock_ts']).dt.tz_localize(None)
     kalshi_df = kalshi_df.sort_values('wallclock_ts')
