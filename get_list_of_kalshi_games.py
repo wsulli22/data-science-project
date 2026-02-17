@@ -1,9 +1,17 @@
 import requests
 import json
 import os
+import re
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Month abbreviation → number for parsing Kalshi tickers
+MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
+    "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
 
 def create_session_with_retries():
     """Create a requests session with retry logic."""
@@ -59,7 +67,6 @@ def fetch_all_ncaamb_markets():
             break
 
         all_markets.extend(markets)
-        print(f"  Page {page}: fetched {len(markets)} markets (total: {len(all_markets)})")
 
         cursor = json_data.get("cursor", None)
         if not cursor:
@@ -67,7 +74,7 @@ def fetch_all_ncaamb_markets():
 
     return all_markets
 
-def get_finished_games_with_teams(all_markets, limit=None):
+def get_finished_games_with_teams(all_markets):
     """
     From a list of markets, extract unique game event_tickers that have ended,
     along with their team abbreviations. Returns list of (event_ticker, team1, team2, winner) tuples.
@@ -123,7 +130,6 @@ def get_finished_games_with_teams(all_markets, limit=None):
         s = g["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
     print(f"\n  Total unique games: {len(games)}")
-    print(f"  Status breakdown: {json.dumps(status_counts, indent=4)}")
 
     # Filter to only finished games: status is closed/settled OR result is set
     finished = {
@@ -155,51 +161,77 @@ def get_finished_games_with_teams(all_markets, limit=None):
             # No teams found, use empty strings
             result.append((ticker, "", "", winner))
 
-    if limit:
-        return result[:limit]
     return result
 
-def get_list_of_all_kalshi_college_basketball_games(limit=None):
+
+def _parse_date_from_ticker(event_ticker):
+    """Parse a date from a Kalshi event ticker. Returns datetime.date or None."""
+    if not event_ticker.startswith("KXNCAAMBGAME-"):
+        return None
+    suffix = event_ticker[len("KXNCAAMBGAME-"):]
+    match = re.match(r"(\d{2})([A-Z]{3})(\d{2})", suffix)
+    if not match:
+        return None
+    yy, mon, dd = match.groups()
+    month_num = MONTH_MAP.get(mon)
+    if month_num is None:
+        return None
+    try:
+        return datetime(2000 + int(yy), month_num, int(dd)).date()
+    except ValueError:
+        return None
+
+
+def get_list_of_all_kalshi_college_basketball_games(date=None):
     """
-    Fetch all finished Kalshi college basketball games.
-    
+    Fetch all finished Kalshi college basketball games, save to
+    list_of_kalshi_games.txt, and return the list.
+
+    Args:
+        date: Optional cutoff date string (e.g. "2026-02-14").
+              Only games on or before this date are included.
+
     Returns:
         List of tuples: (event_ticker, team1, team2, winner) for each finished game
     """
+    print(f"\nFETCHING ALL NCAAMB GAMES ON KALSHI (get_list_of_kalshi_games.py)")
+    print(f"\n  This may take a few seconds...")
     all_markets = fetch_all_ncaamb_markets()
-    if not all_markets:
-        return []
-    
-    games_list = get_finished_games_with_teams(all_markets, limit=limit)
-    return games_list
-
-def main():
-    print("Fetching ALL closed NCAAMB games from Kalshi...")
-    print("-" * 60)
-
-    # Step 1: Fetch all KXNCAAMBGAME markets (no status filter)
-    all_markets = fetch_all_ncaamb_markets()
-
     if not all_markets:
         print("\nNo markets returned from API.")
-        return
+        return []
 
-    # Step 2: Extract finished games with team abbreviations
-    games_with_teams = get_finished_games_with_teams(all_markets)
+    games_list = get_finished_games_with_teams(all_markets)
 
-    if not games_with_teams:
+    if not games_list:
         print("\nNo finished games found.")
-        return
+        return []
 
-    # Step 3: Write to text file in format: event_ticker, team1, team2, winner
+    # Filter by date if specified
+    if date:
+        cutoff = datetime.strptime(date, "%Y-%m-%d").date()
+        filtered = []
+        for game in games_list:
+            game_date = _parse_date_from_ticker(game[0])
+            if game_date is not None and game_date <= cutoff:
+                filtered.append(game)
+        print(f"  Filtered to {len(filtered)} games on or before {date} (from {len(games_list)})")
+        games_list = filtered
+
+    # Save to file
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_file = os.path.join(script_dir, "list_of_kalshi_games.txt")
+    generated_data_dir = os.path.join(script_dir, "GeneratedDataFiles")
+    os.makedirs(generated_data_dir, exist_ok=True)
+    output_file = os.path.join(generated_data_dir, "list_of_kalshi_game.txt")
 
     with open(output_file, "w") as f:
-        for event_ticker, team1, team2, winner in games_with_teams:
+        for event_ticker, team1, team2, winner in games_list:
             f.write(f"{event_ticker},{team1},{team2},{winner}\n")
 
-    print(f"\nWrote {len(games_with_teams)} games to {output_file}")
+    filename = os.path.basename(output_file)
+    print(f"\n  Wrote {len(games_list)} games to GeneratedDataFiles/{filename}")
+    return games_list
+
 
 if __name__ == "__main__":
-    main()
+    get_list_of_all_kalshi_college_basketball_games()

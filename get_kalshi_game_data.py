@@ -1,10 +1,14 @@
 import requests
 import pandas as pd
 import logging
+import time
 from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 5
+RETRY_BACKOFF = 2  # seconds; doubles each retry
 
 SERIES_TICKER = "KXNCAAMBGAME"
 
@@ -79,7 +83,7 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
     df = df.sort_values("end_period_ts").reset_index(drop=True)
 
     # Forward-fill: when no trades occurred (close is null), use previous
-    df["win_prob"] = df["win_prob_close"].fillna(df["win_prob_previous"])
+    df["win_prob"] = df["win_prob_close"].fillna(df["win_prob_previous"]).infer_objects(copy=False)
 
     logger.info(
         f"Built DataFrame: {len(df)} rows, "
@@ -94,12 +98,33 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _request_with_retry(url, headers, params=None, timeout=15):
+    """Make a GET request with retry on 429 rate-limit errors and timeouts."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+            if resp.status_code == 429:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                logger.debug(f"Rate limited (429), retrying in {wait}s (attempt {attempt+1}/{MAX_RETRIES})")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            wait = RETRY_BACKOFF * (2 ** attempt)
+            logger.debug(f"Request failed ({e}), retrying in {wait}s (attempt {attempt+1}/{MAX_RETRIES})")
+            time.sleep(wait)
+    # Final attempt — let it raise on any error
+    resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+    resp.raise_for_status()
+    return resp
+
+
 def _get_market_info(market_ticker: str) -> dict:
     """Fetch market metadata (open/close times, result)."""
     url = f"https://api.elections.kalshi.com/trade-api/v2/markets/{market_ticker}"
     headers = {"accept": "application/json"}
-    resp = requests.get(url, headers=headers, timeout=15)
-    resp.raise_for_status()
+    resp = _request_with_retry(url, headers, timeout=15)
     market = resp.json().get("market", {})
 
     open_time = datetime.fromisoformat(market["open_time"].replace("Z", "+00:00"))
@@ -126,8 +151,7 @@ def _fetch_candlesticks(market_ticker: str, start_ts: int, end_ts: int) -> list[
         "period_interval": 1,
     }
     headers = {"accept": "application/json"}
-    resp = requests.get(url, headers=headers, params=params, timeout=30)
-    resp.raise_for_status()
+    resp = _request_with_retry(url, headers, params=params, timeout=30)
     return resp.json().get("candlesticks", [])
 
 

@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 ESPN_GAME_ID = 401817686
@@ -96,10 +97,25 @@ def _fetch_all_plays(game_id: str) -> list[dict]:
     page = 1
     page_size = 500
 
+    max_retries = 5
+    retry_backoff = 2
+
     while True:
         params = {"limit": page_size, "page": page}
-        resp = requests.get(base_url, params=params, timeout=20)
-        resp.raise_for_status()
+        resp = None
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(base_url, params=params, timeout=20)
+                resp.raise_for_status()
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                wait = retry_backoff * (2 ** attempt)
+                logger.debug(f"ESPN request failed ({e}), retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(wait)
+        else:
+            # Final attempt — let it raise on any error
+            resp = requests.get(base_url, params=params, timeout=20)
+            resp.raise_for_status()
         data = resp.json()
 
         items = data.get("items", [])

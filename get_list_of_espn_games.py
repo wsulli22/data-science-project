@@ -4,6 +4,13 @@ from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+END_DATE = "2026-02-14"
+
+ESPN_SCOREBOARD_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    "mens-college-basketball/scoreboard"
+)
+
 
 def create_session_with_retries():
     """Create a requests session with retry logic."""
@@ -20,76 +27,84 @@ def create_session_with_retries():
     return session
 
 
+def _fetch_single_day(date_obj):
+    """Fetch all finished games for a single date from ESPN."""
+    session = create_session_with_retries()
+    date_str = date_obj.strftime("%Y%m%d")
+    params = {
+        "dates": date_str,
+        "groups": 50,
+        "limit": 365,
+    }
+
+    try:
+        resp = session.get(ESPN_SCOREBOARD_URL, params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.RequestException:
+        return []
+
+    events = data.get("events", [])
+    games = []
+
+    for event in events:
+        game_id = event.get("id", "")
+        status = event.get("status", {}).get("type", {}).get("name", "")
+
+        if status != "STATUS_FINAL":
+            continue
+
+        competitors = event.get("competitions", [{}])[0].get("competitors", [])
+        teams = []
+        winner = ""
+        for comp in competitors:
+            abbrev = comp.get("team", {}).get("abbreviation", "")
+            if abbrev:
+                teams.append(abbrev)
+            if comp.get("winner") and abbrev:
+                winner = abbrev
+
+        teams.sort()
+        if len(teams) >= 2:
+            games.append((game_id, teams[0], teams[1], winner))
+        elif len(teams) == 1:
+            games.append((game_id, teams[0], "", winner))
+        else:
+            games.append((game_id, "", "", winner))
+
+    return games
+
+
 def get_list_of_all_espn_college_basketball_games(
     start_date="2025-11-03",
-    end_date="2026-02-14"
+    end_date=END_DATE
 ):
     """
     Fetch all ESPN men's college basketball games between start_date and
     end_date (inclusive) using the ESPN scoreboard API.
-
     Returns:
         List of tuples: (espn_game_id, team1_abbrev, team2_abbrev, winner_abbrev)
         where team1 and team2 are sorted alphabetically.
     """
-    session = create_session_with_retries()
-    url = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"
+    print(f"\nFETCHING ALL NCAAMB ESPN GAMES SINCE KALSHI'S NCAAMB INCEPTION ({start_date}) (get_list_of_espn_games.py)")
+    print(f"\n  This may take a few seconds...")
 
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
 
-    all_games = []
+    # Build list of all dates to fetch
+    dates = []
     current = start
-
     while current <= end:
-        date_str = current.strftime("%Y%m%d")
-        params = {
-            "dates": date_str,
-            "groups": 50,   # All Division I games
-            "limit": 365,   # Ensure we get every game for the day
-        }
-
-        try:
-            resp = session.get(url, params=params, timeout=20)
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.RequestException as e:
-            print(f"  Error fetching {date_str}: {e}")
-            current += timedelta(days=1)
-            continue
-
-        events = data.get("events", [])
-
-        for event in events:
-            game_id = event.get("id", "")
-            status = event.get("status", {}).get("type", {}).get("name", "")
-
-            # Only include finished games
-            if status != "STATUS_FINAL":
-                continue
-
-            competitors = event.get("competitions", [{}])[0].get("competitors", [])
-            teams = []
-            winner = ""
-            for comp in competitors:
-                abbrev = comp.get("team", {}).get("abbreviation", "")
-                if abbrev:
-                    teams.append(abbrev)
-                if comp.get("winner") and abbrev:
-                    winner = abbrev
-
-            teams.sort()
-            if len(teams) >= 2:
-                all_games.append((game_id, teams[0], teams[1], winner))
-            elif len(teams) == 1:
-                all_games.append((game_id, teams[0], "", winner))
-            else:
-                all_games.append((game_id, "", "", winner))
-
-        if events:
-            print(f"  {current.strftime('%Y-%m-%d')}: {len(events)} games")
-
+        dates.append(current)
         current += timedelta(days=1)
+
+    # Fetch all dates sequentially
+    all_games = []
+    for d in dates:
+        result = _fetch_single_day(d)
+        if result:
+            all_games.extend(result)
 
     # Deduplicate by game_id (ESPN may list a game on multiple dates)
     seen = set()
@@ -99,17 +114,20 @@ def get_list_of_all_espn_college_basketball_games(
             seen.add(game[0])
             unique_games.append(game)
 
-    print(f"\nTotal unique finished ESPN games: {len(unique_games)}")
+    print(f"\n  Total finished NCAAMB games found: {len(unique_games)}")
 
     # Save to file
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_file = os.path.join(script_dir, "list_of_espn_games.txt")
+    generated_data_dir = os.path.join(script_dir, "GeneratedDataFiles")
+    os.makedirs(generated_data_dir, exist_ok=True)
+    output_file = os.path.join(generated_data_dir, "list_of_espn_games.txt")
 
     with open(output_file, "w") as f:
         for game_id, team1, team2, winner in unique_games:
             f.write(f"{game_id},{team1},{team2},{winner}\n")
 
-    print(f"Wrote {len(unique_games)} games to {output_file}")
+    filename = os.path.basename(output_file)
+    print(f"\n  Wrote {len(unique_games)} games to GeneratedDataFiles/{filename}")
 
     return unique_games
 
