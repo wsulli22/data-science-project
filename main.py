@@ -6,7 +6,8 @@ from get_list_of_kalshi_games import get_list_of_all_kalshi_college_basketball_g
 from get_list_of_espn_games import get_list_of_all_espn_college_basketball_games
 from kalshi_espn_game_mapper import map_kalshi_and_espn_game_ids
 from fetch_and_merge_game_data import fetch_and_merge_all_games
-from make_heat_map import generateHeatMap
+from make_raw_data_heat_map import generateHeatMap
+from make_smooth_data_heat_map import load_and_prepare_data, fit_gam_model, generate_smoothed_heatmap
 logging.getLogger("get_kalshi_game_data").setLevel(logging.ERROR)
 logging.getLogger("get_espn_game_timestamp_mapings").setLevel(logging.ERROR)
 
@@ -27,6 +28,12 @@ print(f"\nMax of {NUM_GAMES_TO_ANALYZE} games being analyzed up to {NEWEST_GAME_
 #CHANGE THE mappings_file AND kalshi_games_file PARAMETERS TO USE DIFFERENT FILES
 fetch_and_merge_all_games(num_games=NUM_GAMES_TO_ANALYZE, mappings_file="GeneratedDataFiles/kalshi_espn_game_mappings_GOOD.csv", kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game_GOOD.txt")
 
-#GENERATE HEAT MAP
+#GENERATE RAW DATA HEAT MAP
 #CHANGE THE input_file AND num_time_bins PARAMETERS TO USE DIFFERENT VALUES
 generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean_GOOD.csv", num_time_bins=16)
+
+#GENERATE SMOOTHED DATA HEAT MAP
+input_file = "GeneratedDataFiles/all_games_merged_clean_GOOD.csv"
+df = load_and_prepare_data(input_file)
+gam = fit_gam_model(df)
+generate_smoothed_heatmap(gam)
