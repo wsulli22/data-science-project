@@ -8,7 +8,6 @@ Provides a pipeline used by main.py:
 """
 
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 from get_kalshi_game_data import get_kalshi_game_data
@@ -357,52 +356,28 @@ def fetch_and_merge_all_games(num_games, mappings_file="GeneratedDataFiles/kalsh
 
     print("\nMERGING ESPN PLAY-BY-PLAY AND KALSHI MARKET DATA (fetch_and_merge_game_data.py)\n")
 
-    # Process all games in parallel with 3 threads (limited to avoid Kalshi API rate limits)
     all_merged = []
     total_ot_dropped = 0
     total_ot_before = 0
     total_stale_dropped = 0
 
-    # results dict keyed by original index so we can print in order
-    results = {}
-    next_to_print = 1  # Track the next index we should print
+    for idx, (_, row) in enumerate(rows_to_process, 1):
+        kalshi_game_id, merged, good, discarded, stale_dropped, ot_dropped, ot_before, error, diagnostic = \
+            _process_single_game(row["kalshi_game_id"], row["espn_game_id"], team_lookup)
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        future_to_idx = {}
-        for idx, (_, row) in enumerate(rows_to_process, 1):
-            future = executor.submit(
-                _process_single_game,
-                row["kalshi_game_id"],
-                row["espn_game_id"],
-                team_lookup,
-            )
-            future_to_idx[future] = idx
-
-        # Collect results as they complete and print continuously in order
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            result = future.result()
-            results[idx] = result
-
-            # Print results in order as they become available
-            while next_to_print <= total_games and next_to_print in results:
-                kalshi_game_id, merged, good, discarded, stale_dropped, ot_dropped, ot_before, error, diagnostic = results[next_to_print]
-
-                kalshi_id = kalshi_game_id.ljust(max_id_width)
-                if error:
-                    print(f"  ({next_to_print}/{total_games}) Error processing {kalshi_id}: {error}")
-                elif merged is not None:
-                    all_merged.append(merged)
-                    total_ot_dropped += ot_dropped
-                    total_ot_before += ot_before
-                    total_stale_dropped += stale_dropped
-                    stale_str = f", {stale_dropped} stale" if stale_dropped else ""
-                    print(f"  ({next_to_print}/{total_games}) Processed {kalshi_id} ({good} good rows, {discarded} discarded{stale_str})")
-                else:
-                    diag_str = f" ({diagnostic})" if diagnostic else ""
-                    print(f"  ({next_to_print}/{total_games}) No aligned data for {kalshi_id}{diag_str}")
-                
-                next_to_print += 1
+        kalshi_id = kalshi_game_id.ljust(max_id_width)
+        if error:
+            print(f"  ({idx}/{total_games}) Error processing {kalshi_id}: {error}")
+        elif merged is not None:
+            all_merged.append(merged)
+            total_ot_dropped += ot_dropped
+            total_ot_before += ot_before
+            total_stale_dropped += stale_dropped
+            stale_str = f", {stale_dropped} stale" if stale_dropped else ""
+            print(f"  ({idx}/{total_games}) Processed {kalshi_id} ({good} good rows, {discarded} discarded{stale_str})")
+        else:
+            diag_str = f" ({diagnostic})" if diagnostic else ""
+            print(f"  ({idx}/{total_games}) No aligned data for {kalshi_id}{diag_str}")
 
     if total_stale_dropped > 0 or total_ot_dropped > 0:
         print()
