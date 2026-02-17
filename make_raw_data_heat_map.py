@@ -40,7 +40,7 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
     NUM_TIME_BINS = num_time_bins  # Number of time bins (0-2400 seconds regulation)
     
     FILE = input_file
-    generated_data_dir = "GeneratedDataFiles"
+    generated_data_dir = "GeneratedVisualizations"
     os.makedirs(generated_data_dir, exist_ok=True)
 
     # Calculate time bin edges based on NUM_TIME_BINS
@@ -168,9 +168,9 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
     ax.tick_params(axis="y", labelsize=10)
 
     plt.tight_layout()
-    output_file = os.path.join(generated_data_dir, "heatmap.png")
+    output_file = os.path.join(generated_data_dir, "rawdata_heatmap.png")
     plt.savefig(output_file, dpi=200, bbox_inches="tight")
-    print(f"\n  Saved heatmap.png to GeneratedDataFiles ({len(win_rate_matrix)} prob rows × {len(win_rate_matrix.columns)} time bins)\n")
+    print(f"\n  Saved rawdata_heatmap.png to GeneratedVisualizations ({len(win_rate_matrix)} prob rows × {len(win_rate_matrix.columns)} time bins)\n")
     #print(f"  Cells masked (< {MIN_OBS} obs): {mask.sum().sum()} / {mask.size}")
     plt.close()  # Close the figure instead of showing it
 

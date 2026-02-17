@@ -3,9 +3,10 @@ import csv
 import re
 import os
 from datetime import datetime
-from teamConversionDict import espnAbbrToKalshiAbbr
 
 FILE = "GeneratedDataFiles/list_of_kalshi_game.txt"
+MAPPING_CORRECTIONS_CSV = "mapping_corrections.csv"
+ESPN_TEAM_NAMES_CSV = "GeneratedDataFiles/full_team_names_espn.csv"
 
 # Kalshi API endpoint for events
 kalshiAPIURL = "https://api.elections.kalshi.com/trade-api/v2/events/"
@@ -20,6 +21,63 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+def load_mapping_from_csv():
+    """
+    Load team mapping from mapping_corrections.csv and full_team_names_espn.csv.
+    
+    Returns:
+        dict: Mapping from ESPN abbreviation to Kalshi abbreviation
+    """
+    # First, load ESPN full name -> Kalshi abbreviation from mapping_corrections.csv
+    espn_fullname_to_kalshi = {}
+    try:
+        with open(MAPPING_CORRECTIONS_CSV, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Access columns - CSV reader handles spaces in headers
+                # Try both with and without leading/trailing spaces in key names
+                espn_full_name = (row.get("espn_full_name") or row.get("espn_full_name ") or "").strip()
+                kalshi_abbr = (row.get("kalshi_abbreviation") or row.get(" kalshi_abbreviation") or "").strip()
+                if espn_full_name and kalshi_abbr:
+                    espn_fullname_to_kalshi[espn_full_name] = kalshi_abbr
+    except FileNotFoundError:
+        print(f"Warning: {MAPPING_CORRECTIONS_CSV} not found. Using empty mapping.")
+        return {}
+    except Exception as e:
+        print(f"Error reading {MAPPING_CORRECTIONS_CSV}: {e}")
+        return {}
+    
+    # Second, load ESPN full name -> ESPN abbreviation from full_team_names_espn.csv
+    espn_fullname_to_abbr = {}
+    try:
+        with open(ESPN_TEAM_NAMES_CSV, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Handle both possible column names (with spaces)
+                espn_full_name = (row.get("full team name") or row.get("espn_full_name") or "").strip()
+                espn_abbr = (row.get("espn team abbreviation") or row.get("espn_abbreviation") or "").strip()
+                if espn_full_name and espn_abbr:
+                    espn_fullname_to_abbr[espn_full_name] = espn_abbr
+    except FileNotFoundError:
+        print(f"Warning: {ESPN_TEAM_NAMES_CSV} not found. Cannot build full mapping.")
+        return {}
+    except Exception as e:
+        print(f"Error reading {ESPN_TEAM_NAMES_CSV}: {e}")
+        return {}
+    
+    # Combine: ESPN abbreviation -> Kalshi abbreviation
+    espn_abbr_to_kalshi = {}
+    for espn_full_name, kalshi_abbr in espn_fullname_to_kalshi.items():
+        espn_abbr = espn_fullname_to_abbr.get(espn_full_name)
+        if espn_abbr:
+            espn_abbr_to_kalshi[espn_abbr] = kalshi_abbr
+    
+    print(f"Loaded {len(espn_abbr_to_kalshi)} team mappings from CSV files")
+    return espn_abbr_to_kalshi
+
+# Load mapping from CSV files
+espnAbbrToKalshiAbbr = load_mapping_from_csv()
 
 # Create reverse dictionary: Kalshi abbreviation -> ESPN abbreviation
 kalshiAbbrToEspnAbbr = {v: k for k, v in espnAbbrToKalshiAbbr.items()}

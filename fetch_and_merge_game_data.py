@@ -336,7 +336,7 @@ def _clean_merged_data(df):
 def fetch_and_merge_all_games(num_games, mappings_file="GeneratedDataFiles/kalshi_espn_game_mappings.csv", kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game.txt"):
     """
     For each mapped game (up to num_games), fetch ESPN and Kalshi data
-    in parallel, merge them, and save the combined result to a CSV.
+    sequentially, merge them, and save the combined result to a CSV.
 
     Args:
         num_games: Maximum number of games to process.
