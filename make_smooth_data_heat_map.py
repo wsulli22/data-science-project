@@ -97,12 +97,13 @@ def fit_gam_model(df):
     return gam
 
 
-def plot_heatmap_from_matrix(win_rate_matrix, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR, save_csv=False):
+def plot_heatmap_from_matrix(win_rate_matrix, count_matrix=None, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR, save_csv=False):
     """
     Generate a heatmap visualization from a pre-computed matrix.
     
     Args:
         win_rate_matrix: DataFrame with probabilities as index and time bins as columns
+        count_matrix: Optional DataFrame with observation counts (same shape as win_rate_matrix)
         out_dir: Output directory for CSV data files
         vis_dir: Output directory for PNG visualization files
         save_csv: Whether to save the matrix as CSV (if False, assumes it already exists)
@@ -121,7 +122,7 @@ def plot_heatmap_from_matrix(win_rate_matrix, out_dir=OUTPUT_DIR, vis_dir=VISUAL
         df_out.to_csv(csv_path)
         print(f"    CSV ({len(win_rate_matrix)} × {len(win_rate_matrix.columns)}) → {csv_path}")
     
-    # ── annotation matrix (show "XX%" in each cell) ──────────────────────
+    # ── annotation matrix (show "XX% (n)" in each cell if counts available, else "XX%") ──────────────────────
     annot_matrix = win_rate_matrix.copy().astype(object)
     for r in win_rate_matrix.index:
         for c in win_rate_matrix.columns:
@@ -129,7 +130,14 @@ def plot_heatmap_from_matrix(win_rate_matrix, out_dir=OUTPUT_DIR, vis_dir=VISUAL
             if pd.isna(val):
                 annot_matrix.loc[r, c] = ""
             else:
-                annot_matrix.loc[r, c] = f"{val*100:.0f}%"
+                if count_matrix is not None and r in count_matrix.index and c in count_matrix.columns:
+                    n = count_matrix.loc[r, c]
+                    if pd.isna(n) or n == 0:
+                        annot_matrix.loc[r, c] = f"{val*100:.0f}%"
+                    else:
+                        annot_matrix.loc[r, c] = f"{val*100:.0f}% ({int(n)})"
+                else:
+                    annot_matrix.loc[r, c] = f"{val*100:.0f}%"
     
     # ── flip so high probability is on top ───────────────────────────────
     data_plot = win_rate_matrix.iloc[::-1]
@@ -180,9 +188,12 @@ def plot_heatmap_from_matrix(win_rate_matrix, out_dir=OUTPUT_DIR, vis_dir=VISUAL
     
     ax.set_xlabel("Game Time (minutes elapsed)", fontsize=14, labelpad=12)
     ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12)
+    title_text = "GAM-Smoothed Calibration Heatmap — Kalshi Win Probability vs. Empirical Win Rate\n"
+    title_text += f"(99 prob rows × {NUM_TIME_BINS} time bins · {int(BIN_SECONDS/60)}-min buckets · smoothed via GAM)"
+    if count_matrix is not None:
+        title_text += "\nNote: Numbers in parentheses indicate raw data observation count"
     ax.set_title(
-        "GAM-Smoothed Calibration Heatmap — Kalshi Win Probability vs. Empirical Win Rate\n"
-        f"(99 prob rows × {NUM_TIME_BINS} time bins · {int(BIN_SECONDS/60)}-min buckets · smoothed via GAM)",
+        title_text,
         fontsize=15,
         pad=16,
     )
@@ -200,7 +211,7 @@ def plot_heatmap_from_matrix(win_rate_matrix, out_dir=OUTPUT_DIR, vis_dir=VISUAL
     return win_rate_matrix
 
 
-def generate_smoothed_heatmap(gam, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR):
+def generate_smoothed_heatmap(gam, df, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR):
     """
     Generate a smoothed calibration heatmap using the GAM model.
     
@@ -209,6 +220,10 @@ def generate_smoothed_heatmap(gam, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR
     
     Grid: 99 prob rows × 20 time bins.
     Also exports the underlying matrix as a CSV.
+    
+    Args:
+        gam: Fitted GAM model
+        df: Raw dataframe with observations (for calculating counts)
     """
     # ── time bin edges and labels ────────────────────────────────────────
     TIME_EDGES = np.linspace(0, 2400, NUM_TIME_BINS + 1)
@@ -230,8 +245,11 @@ def generate_smoothed_heatmap(gam, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR
     # ── build pandas matrices for seaborn ────────────────────────────────
     win_rate_matrix = pd.DataFrame(Z, index=probs, columns=TIME_LABELS)
     
+    # ── calculate raw observation counts for each cell ───────────────────
+    count_matrix = calculate_count_matrix_from_raw_data(df)
+    
     # Generate the plot and save CSV
-    return plot_heatmap_from_matrix(win_rate_matrix, out_dir, vis_dir, save_csv=True)
+    return plot_heatmap_from_matrix(win_rate_matrix, count_matrix, out_dir, vis_dir, save_csv=True)
 
 
 def load_smoothed_data_from_csv(csv_path):
@@ -240,6 +258,54 @@ def load_smoothed_data_from_csv(csv_path):
     df = pd.read_csv(csv_path, index_col=0)
     print(f"    Loaded matrix: {len(df)} rows × {len(df.columns)} columns")
     return df
+
+
+def calculate_count_matrix_from_raw_data(df_raw):
+    """
+    Calculate raw observation count matrix from raw data.
+    Uses the same binning as the smoothed heatmap.
+    """
+    # ── time bin edges and labels ────────────────────────────────────────
+    TIME_EDGES = np.linspace(0, 2400, NUM_TIME_BINS + 1)
+    TIME_LABELS = [f"{int(lo/60)}-{int(hi/60)} min"
+                   for lo, hi in zip(TIME_EDGES[:-1], TIME_EDGES[1:])]
+    
+    # ── probability rows ─────────────────────────────────────────────────
+    probs = np.arange(1, 100)   # 1% … 99%
+    
+    # Round win_prob_pct to nearest integer and bin time
+    df_counts = df_raw.copy()
+    df_counts["prob_int"] = df_counts["win_prob_pct"].round(0).astype(int)
+    df_counts = df_counts[df_counts["prob_int"].between(1, 99)]
+    
+    df_counts["time_bin"] = pd.cut(
+        df_counts["game_elapsed_seconds"],
+        bins=TIME_EDGES,
+        labels=TIME_LABELS,
+        right=False,
+        include_lowest=True,
+    )
+    
+    # Count observations per cell
+    count_grouped = (
+        df_counts.groupby(["prob_int", "time_bin"], observed=False)
+        .size()
+        .reset_index(name="count")
+    )
+    
+    # Create count matrix, handling case where pivot might have missing values
+    try:
+        count_matrix = count_grouped.pivot(
+            index="prob_int", columns="time_bin", values="count"
+        )
+        # Align count_matrix with win_rate_matrix (fill missing with 0)
+        count_matrix = count_matrix.reindex(index=probs, columns=TIME_LABELS, fill_value=0)
+        # Convert to int to avoid float issues
+        count_matrix = count_matrix.fillna(0).astype(int)
+        return count_matrix
+    except Exception as e:
+        print(f"    Warning: Could not create count matrix: {e}")
+        return None
 
 
 def main():
@@ -270,7 +336,13 @@ def main():
         
         # Load existing smoothed data and regenerate image
         smoothed_matrix = load_smoothed_data_from_csv(csv_path)
-        plot_heatmap_from_matrix(smoothed_matrix, vis_dir=VISUALIZATION_DIR, save_csv=False)
+        
+        # Load raw data to calculate observation counts
+        print("  Loading raw data to calculate observation counts...")
+        df_raw = load_and_prepare_data(INPUT_FILE)
+        count_matrix = calculate_count_matrix_from_raw_data(df_raw)
+        
+        plot_heatmap_from_matrix(smoothed_matrix, count_matrix, vis_dir=VISUALIZATION_DIR, save_csv=False)
     else:
         # Check if smoothed data already exists
         if os.path.exists(csv_path):
@@ -281,7 +353,13 @@ def main():
             
             # Load existing smoothed data and regenerate image
             smoothed_matrix = load_smoothed_data_from_csv(csv_path)
-            plot_heatmap_from_matrix(smoothed_matrix, vis_dir=VISUALIZATION_DIR, save_csv=False)
+            
+            # Load raw data to calculate observation counts
+            print("  Loading raw data to calculate observation counts...")
+            df_raw = load_and_prepare_data(INPUT_FILE)
+            count_matrix = calculate_count_matrix_from_raw_data(df_raw)
+            
+            plot_heatmap_from_matrix(smoothed_matrix, count_matrix, vis_dir=VISUALIZATION_DIR, save_csv=False)
         else:
             # 1. Load and prepare data
             df = load_and_prepare_data(INPUT_FILE)
@@ -289,8 +367,8 @@ def main():
             # 2. Fit GAM model for smoothing
             gam = fit_gam_model(df)
             
-            # 3. Generate smoothed heatmap
-            smoothed_matrix = generate_smoothed_heatmap(gam)
+            # 3. Generate smoothed heatmap (pass df for count calculation)
+            smoothed_matrix = generate_smoothed_heatmap(gam, df)
     
     print(f"\n  All outputs saved:")
     print(f"    - {VISUALIZATION_DIR}/smoothed_heatmap.png")
