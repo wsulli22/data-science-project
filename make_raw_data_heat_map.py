@@ -100,7 +100,7 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
             ytick_positions.append(i)
             ytick_labels.append(f"{prob}%")
 
-    # ── build annotation matrix (empirical win rate as "XX%") ────────────
+    # ── build annotation matrix (empirical win rate as "XX% (n)") ────────────
     annot_matrix = win_rate_matrix.copy().astype(object)
     for r in win_rate_matrix.index:
         for c in win_rate_matrix.columns:
@@ -109,7 +109,7 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
             if pd.isna(wr) or n < MIN_OBS:
                 annot_matrix.loc[r, c] = ""
             else:
-                annot_matrix.loc[r, c] = f"{wr*100:.0f}%"
+                annot_matrix.loc[r, c] = f"{wr*100:.0f}% ({int(n)})"
 
     # ── plot ─────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(16, 28))
@@ -137,7 +137,7 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
         cbar_kws={"label": "Empirical Win Rate", "shrink": 0.6, "pad": 0.02},
         ax=ax,
         xticklabels=True,
-        annot_kws={"fontsize": 5.5, "fontweight": "bold"},
+        annot_kws={"fontsize": 5.5, "fontweight": "bold", "color": "white"},
     )
 
     # Grey fill for masked (low-data) cells
@@ -155,11 +155,21 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
     ax.set_yticks(ytick_positions_flipped)
     ax.set_yticklabels(ytick_labels_flipped, fontsize=10)
 
+    # Show 1/2 as many x-axis labels (every other one)
+    x_tick_positions = ax.get_xticks()
+    x_tick_labels = [label.get_text() for label in ax.get_xticklabels()]
+    # Keep every other label
+    x_tick_positions_filtered = x_tick_positions[::2]
+    x_tick_labels_filtered = x_tick_labels[::2]
+    ax.set_xticks(x_tick_positions_filtered)
+    ax.set_xticklabels(x_tick_labels_filtered, fontsize=11, rotation=0)
+
     ax.set_xlabel("Game Time (minutes elapsed)", fontsize=14, labelpad=12)
     ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12)
     ax.set_title(
         "Calibration Heat Map — Kalshi Win Probability vs. Empirical Win Rate\n"
-        f"({n_games} games · {len(df):,} observations · {n_prob_rows} prob rows × {n_time_bins} time bins · regulation time only)",
+        f"({n_games} games · {len(df):,} observations · {n_prob_rows} prob rows × {n_time_bins} time bins · regulation time only)\n"
+        "Note: Numbers in parentheses indicate observation count",
         fontsize=15,
         pad=16,
     )
