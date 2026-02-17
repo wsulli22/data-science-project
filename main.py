@@ -1,66 +1,32 @@
 #MAIN FUNCTION
 
-#IMPORTS
-import csv
-import pandas as pd
+#SETUP
+import logging
 from get_list_of_kalshi_games import get_list_of_all_kalshi_college_basketball_games
 from get_list_of_espn_games import get_list_of_all_espn_college_basketball_games
-from kalshi_espn_game_mapper import map_espn_kalshi_games
-from get_espn_game_timestamp_mapings import get_espn_game_timestamp_mapping
-from get_kalshi_game_data import get_kalshi_game_data
+from kalshi_espn_game_mapper import map_kalshi_and_espn_game_ids
+from fetch_and_merge_game_data import fetch_and_merge_all_games
+from make_heat_map import generateHeatMap
+logging.getLogger("get_kalshi_game_data").setLevel(logging.ERROR)
+logging.getLogger("get_espn_game_timestamp_mapings").setLevel(logging.ERROR)
 
-#GET LIST OF ALL KALSHI CLOSED MARKET COLLEGE BASKETBALL GAMES
-kalshi_games_list = get_list_of_all_kalshi_college_basketball_games()
+NUM_GAMES_TO_ANALYZE = 5000 #USE A REALLY BIG NUMBER FOR ALL GAMES
+NEWEST_GAME_DATE_CUTOFF_DATE = "2026-02-14"
 
-#GET LIST OF ALL ESPN COMPLETED COLLEGE BASKETBALL GAMES
-espn_games_list = get_list_of_all_espn_college_basketball_games()
+#PRINT THE NUMBER OF GAMES TO ANALYZE AND THE NEWEST GAME DATE CUTOFF DATE
+print(f"\nMax of {NUM_GAMES_TO_ANALYZE} games being analyzed up to {NEWEST_GAME_DATE_CUTOFF_DATE}\n")
 
-#CREATE A CSV FILE THAT MAPS OF KALSHI GAME ID TO ESPN GAME ID
-mapped_games = map_espn_kalshi_games()
+#GET LIST OF ALL KALSHI AND ESPN COLLEGE BASKETBALL GAMES
+#kalshi_games = get_list_of_all_kalshi_college_basketball_games(date=NEWEST_GAME_DATE_CUTOFF_DATE)
+#espn_games = get_list_of_all_espn_college_basketball_games()
 
-with open("team_mapping.csv", mode="w", newline="") as file:
-    writer = csv.DictWriter(file, fieldnames=["kalshi_id", "espn_id"])
-    
-    for kalshi_id, espn_id in mapped_games.items():
-        writer.writerow({'kalshi_id': kalshi_id, 'espn_id': espn_id})
+#CREATE A CSV FILE THAT MAPS KALSHI GAME ID TO ESPN GAME ID
+#map_kalshi_and_espn_game_ids(limit=NUM_GAMES_TO_ANALYZE)
 
-print("CSV saved as team_mapping.csv")
+#FOR EACH SUCCESSFUL GAME MATCH, FETCH ESPN AND KALSHI DATA, MERGE, AND SAVE
+#CHANGE THE mappings_file AND kalshi_games_file PARAMETERS TO USE DIFFERENT FILES
+fetch_and_merge_all_games(num_games=NUM_GAMES_TO_ANALYZE, mappings_file="GeneratedDataFiles/kalshi_espn_game_mappings_GOOD.csv", kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game_GOOD.txt")
 
-gameData = pd.DataFrame()
-results_list = []
-
-#FOR EACH KALSHI GAME THAT IS ALSO IN ESPN GAME
-for kalshi_id, espn_game_id in mapped_games.items():
-    #PULL THE ESPN GAME TIMESTAMP MAPPING FOR EACH GAME
-
-    espn_df = get_espn_game_timestamp_mapping(espn_game_id)
-    espn_df['wallclock_ts'] = pd.to_datetime(espn_df['wallclock_ts']).dt.tz_localize(None)
-    espn_df = espn_df.sort_values('wallclock_ts')
-
-    #PULL THE NECESSARY KALSHI GAME DATA FOR EACH GAME
-    with open("list_of_espn_games.txt", "r") as f:
-        for line in f:
-            if line.startswith(espn_game_id):
-                line = line.strip()
-                break
-
-    team = line.split(",")[1]
-    kalshi_df = get_kalshi_game_data(kalshi_id, team)
-    kalshi_df['wallclock_ts'] = pd.to_datetime(kalshi_df['wallclock_ts']).dt.tz_localize(None)
-    kalshi_df = kalshi_df.sort_values('wallclock_ts')
-    
-    merged_game_data = pd.merge_asof(
-            kalshi_df, 
-            espn_df, 
-            on='wallclock_ts', 
-            direction='backward'
-        )
-
-    results_list.append(merged_game_data)
-
-if results_list:
-    #MERGE THE DATA STRUCTURES INTO A SINGLE DATAFRAME
-    gameData = pd.concat(results_list, ignore_index=True)
-
-    gameData.to_csv("scraped_game_results.csv", index=False)
-    print("File saved successfully!")
+#GENERATE HEAT MAP
+#CHANGE THE input_file AND num_time_bins PARAMETERS TO USE DIFFERENT VALUES
+generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean_GOOD.csv", num_time_bins=16)
