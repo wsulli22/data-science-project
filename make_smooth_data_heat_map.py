@@ -119,8 +119,25 @@ def plot_heatmap_from_matrix(win_rate_matrix, count_matrix=None, out_dir=OUTPUT_
         df_out = win_rate_matrix.copy()
         df_out.index.name = "kalshi_prob_pct"
         df_out.columns.name = "time_bin"
+        
+        # Add count columns if count_matrix is available
+        if count_matrix is not None:
+            # Create count columns with "_count" suffix
+            count_df = count_matrix.copy()
+            count_df.columns = [f"{col}_count" for col in count_df.columns]
+            # Align indices to ensure they match
+            count_df = count_df.reindex(df_out.index, fill_value=0)
+            # Combine smoothed probabilities and counts
+            df_out = pd.concat([df_out, count_df], axis=1)
+            # Reorder columns so each time bin is followed by its count
+            new_columns = []
+            for time_bin in win_rate_matrix.columns:
+                new_columns.append(time_bin)
+                new_columns.append(f"{time_bin}_count")
+            df_out = df_out[new_columns]
+        
         df_out.to_csv(csv_path)
-        print(f"    CSV ({len(win_rate_matrix)} × {len(win_rate_matrix.columns)}) → {csv_path}")
+        print(f"    CSV ({len(win_rate_matrix)} × {len(df_out.columns)} columns) → {csv_path}")
     
     # ── annotation matrix (show "XX% (n)" in each cell if counts available, else "XX%") ──────────────────────
     annot_matrix = win_rate_matrix.copy().astype(object)
@@ -250,6 +267,23 @@ def generate_smoothed_heatmap(gam, df, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION
     
     # Generate the plot and save CSV
     return plot_heatmap_from_matrix(win_rate_matrix, count_matrix, out_dir, vis_dir, save_csv=True)
+
+
+def generate_smoothed_heatmap_from_file(input_file=INPUT_FILE, out_dir=OUTPUT_DIR, vis_dir=VISUALIZATION_DIR):
+    """
+    One-line function to generate smoothed heatmap from input file.
+    
+    Args:
+        input_file: Path to the input CSV file
+        out_dir: Output directory for CSV data files
+        vis_dir: Output directory for PNG visualization files
+    
+    Returns:
+        The smoothed win rate matrix
+    """
+    df = load_and_prepare_data(input_file)
+    gam = fit_gam_model(df)
+    return generate_smoothed_heatmap(gam, df, out_dir, vis_dir)
 
 
 def load_smoothed_data_from_csv(csv_path):

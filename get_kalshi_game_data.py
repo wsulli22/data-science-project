@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import logging
 import time
+import re
 from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -32,6 +33,8 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
             volume             – contracts traded in this minute
             open_interest      – total outstanding contracts
             result             – final outcome for this team ("yes" = win, "no" = loss)
+            team1_score        – final score for team 1 (if available)
+            team2_score        – final score for team 2 (if available)
     """
     event_ticker = event_ticker.upper()
     team_abbreviation = team_abbreviation.upper()
@@ -43,6 +46,11 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
     close_time = market_info["close_time"]
     result = market_info["result"]
 
+    # Step 1b: Get event info to fetch scores
+    event_info = _get_event_info(event_ticker)
+    team1_score = event_info.get("team1_score", None)
+    team2_score = event_info.get("team2_score", None)
+
     # Convert to unix timestamps
     #start_ts = int(open_time.timestamp())
     #end_ts = int(close_time.timestamp())
@@ -51,6 +59,8 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
     start_ts = end_ts - (6 * 3600)  # 6 hours in seconds
 
     logger.info(f"Market {market_ticker}: {open_time} → {close_time}, result={result}")
+    if team1_score is not None and team2_score is not None:
+        logger.info(f"Scores: {team1_score} - {team2_score}")
 
     # Step 2: Fetch all 1-minute candlesticks
     candlesticks = _fetch_candlesticks(market_ticker, start_ts, end_ts)
@@ -77,6 +87,8 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
             "volume": volume,
             "open_interest": oi,
             "result": result,
+            "team1_score": team1_score,
+            "team2_score": team2_score,
         })
 
     df = pd.DataFrame(rows)
@@ -136,6 +148,80 @@ def _get_market_info(market_ticker: str) -> dict:
         "close_time": close_time,
         "result": result,
     }
+
+
+def _get_event_info(event_ticker: str) -> dict:
+    """Fetch event metadata including scores if available."""
+    url = f"https://api.elections.kalshi.com/trade-api/v2/events/{event_ticker}"
+    headers = {"accept": "application/json"}
+    
+    try:
+        resp = _request_with_retry(url, headers, timeout=15)
+        event = resp.json().get("event", {})
+        
+        # Try to extract scores from various possible fields
+        team1_score = None
+        team2_score = None
+        
+        # Check common score field names
+        if "score" in event:
+            score_data = event["score"]
+            if isinstance(score_data, dict):
+                team1_score = score_data.get("team1_score") or score_data.get("score1") or score_data.get("home_score")
+                team2_score = score_data.get("team2_score") or score_data.get("score2") or score_data.get("away_score")
+            elif isinstance(score_data, list) and len(score_data) >= 2:
+                team1_score = score_data[0]
+                team2_score = score_data[1]
+        
+        # Check for scores in metadata or outcome fields
+        if team1_score is None:
+            metadata = event.get("metadata", {})
+            team1_score = metadata.get("team1_score") or metadata.get("score1") or metadata.get("home_score")
+            team2_score = metadata.get("team2_score") or metadata.get("score2") or metadata.get("away_score")
+        
+        # Check outcome field
+        if team1_score is None:
+            outcome = event.get("outcome", {})
+            if isinstance(outcome, dict):
+                team1_score = outcome.get("team1_score") or outcome.get("score1")
+                team2_score = outcome.get("team2_score") or outcome.get("score2")
+        
+        # Try to parse scores from description or subtitle if available
+        if team1_score is None:
+            subtitle = event.get("subtitle", "")
+            description = event.get("description", "")
+            # Look for score patterns like "85-72" or "Score: 85-72"
+            score_pattern = r'(\d+)\s*[-–]\s*(\d+)'
+            for text in [subtitle, description]:
+                match = re.search(score_pattern, text)
+                if match:
+                    team1_score = int(match.group(1))
+                    team2_score = int(match.group(2))
+                    break
+        
+        # Convert to integers if they're strings
+        if team1_score is not None:
+            try:
+                team1_score = int(team1_score) if isinstance(team1_score, (int, str)) and str(team1_score).isdigit() else None
+            except (ValueError, TypeError):
+                team1_score = None
+        
+        if team2_score is not None:
+            try:
+                team2_score = int(team2_score) if isinstance(team2_score, (int, str)) and str(team2_score).isdigit() else None
+            except (ValueError, TypeError):
+                team2_score = None
+        
+        return {
+            "team1_score": team1_score,
+            "team2_score": team2_score,
+        }
+    except Exception as e:
+        logger.debug(f"Could not fetch event info for {event_ticker}: {e}")
+        return {
+            "team1_score": None,
+            "team2_score": None,
+        }
 
 
 def _fetch_candlesticks(market_ticker: str, start_ts: int, end_ts: int) -> list[dict]:
