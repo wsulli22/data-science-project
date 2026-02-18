@@ -34,13 +34,18 @@ def load_mapping_from_csv():
     try:
         with open(MAPPING_CORRECTIONS_CSV, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
+            row_count = 0
             for row in reader:
+                row_count += 1
                 # Access columns - CSV reader handles spaces in headers
                 # Try both with and without leading/trailing spaces in key names
                 espn_full_name = (row.get("espn_full_name") or row.get("espn_full_name ") or "").strip()
                 kalshi_abbr = (row.get("kalshi_abbreviation") or row.get(" kalshi_abbreviation") or "").strip()
                 if espn_full_name and kalshi_abbr:
                     espn_fullname_to_kalshi[espn_full_name] = kalshi_abbr
+            if row_count == 0:
+                # File exists but is empty (only has header or is completely empty)
+                pass  # This is okay, just means no manual corrections are set up
     except FileNotFoundError:
         print(f"Warning: {MAPPING_CORRECTIONS_CSV} not found. Using empty mapping.")
         return {}
@@ -73,14 +78,12 @@ def load_mapping_from_csv():
         if espn_abbr:
             espn_abbr_to_kalshi[espn_abbr] = kalshi_abbr
     
-    print(f"Loaded {len(espn_abbr_to_kalshi)} team mappings from CSV files")
+    print(f"  Loaded {len(espn_abbr_to_kalshi)} team mappings from CSV files")
     return espn_abbr_to_kalshi
 
-# Load mapping from CSV files
-espnAbbrToKalshiAbbr = load_mapping_from_csv()
-
-# Create reverse dictionary: Kalshi abbreviation -> ESPN abbreviation
-kalshiAbbrToEspnAbbr = {v: k for k, v in espnAbbrToKalshiAbbr.items()}
+# Global variables for team mappings (loaded lazily when needed)
+espnAbbrToKalshiAbbr = {}
+kalshiAbbrToEspnAbbr = {}
 
 # Month abbreviation → number for parsing Kalshi tickers
 MONTH_MAP = {
@@ -205,62 +208,60 @@ def convert_kalshi_to_espn_abbr(kalshi_abbr):
 def find_matching_espn_game(kalshi_team1, kalshi_team2, espn_games,
                             kalshi_date=None):
     """
-    Find a matching ESPN game for given Kalshi teams, using date to
-    disambiguate when the same two teams played more than once.
+    Find a matching ESPN game for given Kalshi teams, using date as the primary filter.
     
     Args:
         kalshi_team1: First team abbreviation from Kalshi
         kalshi_team2: Second team abbreviation from Kalshi
-        espn_games:   List of ESPN games, each as (game_id, team1, team2, winner)
-        kalshi_date:  datetime.date parsed from the Kalshi ticker (optional but
-                      strongly recommended)
+        espn_games:   List of ESPN games, each as (game_id, team1, team2, winner, date)
+                     where date is a datetime.date object or None
+        kalshi_date:  datetime.date parsed from the Kalshi ticker (required for reliable matching).
+                      If provided, filters ESPN games by date first, then by teams.
         
     Returns:
-        str or None: ESPN game ID if match found, None otherwise
+        str or None: ESPN game ID if match found with matching date and teams, None otherwise
     """
     # Convert Kalshi abbreviations to ESPN abbreviations
     espn_team1 = convert_kalshi_to_espn_abbr(kalshi_team1)
     espn_team2 = convert_kalshi_to_espn_abbr(kalshi_team2)
     
-    # Collect ALL ESPN games that match the two teams
-    candidates = []
-    for game_id, team1, team2, winner in espn_games:
-        if (team1 == espn_team1 and team2 == espn_team2) or \
-           (team1 == espn_team2 and team2 == espn_team1):
-            candidates.append(game_id)
-    
-    if not candidates:
-        return None
-    
-    # Only one match → no ambiguity
-    if len(candidates) == 1:
-        return candidates[0]
-    
-    # Multiple matches (rematch) → use date to pick the right one
+    # If date is provided, use it as the primary filter
     if kalshi_date is not None:
-        #print(f"    ⚠ {len(candidates)} ESPN games match teams "
-        #      f"({espn_team1} vs {espn_team2}); using date {kalshi_date} "
-        #      f"to disambiguate …")
-        for game_id in candidates:
-            espn_date = get_espn_game_date(game_id)
+        # First filter by date, then by teams
+        for game_data in espn_games:
+            # Unpack game data
+            game_id, team1, team2, winner, espn_date = game_data[:5]
+            
+            # Skip games without dates
+            if espn_date is None:
+                continue
+            # Check if dates match
             if espn_date == kalshi_date:
-                #print(f"      ✓ ESPN {game_id} date {espn_date} matches")
-                return game_id
-            else:
-                pass
-                #print(f"      ✗ ESPN {game_id} date {espn_date} — wrong date")
-        # None matched by date; log and return None
-        #print(f"No ESPN match for {kalshi_team1} vs {kalshi_team2} on {kalshi_date}")
+                # Date matches - now check teams
+                if team1 == espn_team1 and team2 == espn_team2:
+                    return game_id
+                elif team1 == espn_team2 and team2 == espn_team1:
+                    return game_id
+        # No match found with matching date and teams
         return None
     
-    # No date available — fall back to first match (legacy behaviour)
-    return candidates[0]
+    # No date available — fall back to team matching only (less reliable)
+    for game_data in espn_games:
+        # Unpack game data
+        game_id, team1, team2, winner, espn_date = game_data[:5]
+        
+        if team1 == espn_team1 and team2 == espn_team2:
+            return game_id
+        elif team1 == espn_team2 and team2 == espn_team1:
+            return game_id
+    
+    return None
 
 
-def _process_single_kalshi_game(event_ticker, kalshi_team1, kalshi_team2, espn_games):
+def _process_single_kalshi_game(event_ticker, kalshi_team1, kalshi_team2, kalshi_date, espn_games):
     """
     Process a single Kalshi game: verify it exists via API, then find a
-    matching ESPN game.
+    matching ESPN game using date as the primary filter.
 
     Returns:
         (event_ticker, kalshi_team1, kalshi_team2, espn_game_id_or_None, status)
@@ -269,7 +270,6 @@ def _process_single_kalshi_game(event_ticker, kalshi_team1, kalshi_team2, espn_g
     if not verify_kalshi_game_exists(event_ticker):
         return (event_ticker, kalshi_team1, kalshi_team2, None, "not_found_in_api")
 
-    kalshi_date = parse_kalshi_date(event_ticker)
     espn_game_id = find_matching_espn_game(
         kalshi_team1, kalshi_team2, espn_games, kalshi_date=kalshi_date
     )
@@ -293,7 +293,12 @@ def map_kalshi_and_espn_game_ids(limit=None):
     """
     print("\nFINDING ESPN MATCHES FOR EACH KALSHI GAME (kalshi_espn_game_mapper.py)")
     
-    # Load Kalshi games
+    # Load team mappings from CSV files
+    global espnAbbrToKalshiAbbr, kalshiAbbrToEspnAbbr
+    espnAbbrToKalshiAbbr = load_mapping_from_csv()
+    kalshiAbbrToEspnAbbr = {v: k for k, v in espnAbbrToKalshiAbbr.items()}
+    
+    # Load Kalshi games with dates
     kalshi_games = []
     try:
         with open(FILE, "r") as f:
@@ -306,12 +311,25 @@ def map_kalshi_and_espn_game_ids(limit=None):
                     event_ticker = parts[0]
                     team1 = parts[1]
                     team2 = parts[2]
-                    kalshi_games.append((event_ticker, team1, team2))
+                    # Parse date from file (format: YYYY-MM-DD)
+                    kalshi_date = None
+                    if len(parts) >= 5:
+                        date_str = parts[4].strip()
+                        try:
+                            kalshi_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        except (ValueError, IndexError):
+                            # Fall back to parsing from ticker if date not in file
+                            kalshi_date = parse_kalshi_date(event_ticker)
+                    else:
+                        # Fall back to parsing from ticker if date not in file
+                        kalshi_date = parse_kalshi_date(event_ticker)
+                    
+                    kalshi_games.append((event_ticker, team1, team2, kalshi_date))
     except FileNotFoundError:
         print(f"Error: {FILE} not found")
         return
     
-    # Load ESPN games
+    # Load ESPN games with dates
     espn_games = []
     try:
         with open("GeneratedDataFiles/list_of_espn_games.txt", "r") as f:
@@ -325,7 +343,16 @@ def map_kalshi_and_espn_game_ids(limit=None):
                     team1 = parts[1]
                     team2 = parts[2]
                     winner = parts[3] if len(parts) > 3 else ""
-                    espn_games.append((game_id, team1, team2, winner))
+                    # Parse date from file (format: YYYY-MM-DD)
+                    espn_date = None
+                    if len(parts) >= 5:
+                        date_str = parts[4].strip()
+                        try:
+                            espn_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        except (ValueError, IndexError):
+                            pass  # Keep as None if parsing fails
+                    
+                    espn_games.append((game_id, team1, team2, winner, espn_date))
     except FileNotFoundError:
         print("Error: GeneratedDataFiles/list_of_espn_games.txt not found")
         return
@@ -334,7 +361,7 @@ def map_kalshi_and_espn_game_ids(limit=None):
     print(f"\n  Loaded {len(kalshi_games)} Kalshi games and {len(espn_games)} ESPN games\n")
     
     # Calculate max width of event tickers for alignment
-    max_ticker_width = max(len(event_ticker) for event_ticker, _, _ in kalshi_games)
+    max_ticker_width = max(len(event_ticker) for event_ticker, _, _, _ in kalshi_games)
     
     # --- Process games sequentially ---
     mappings = []
@@ -342,13 +369,13 @@ def map_kalshi_and_espn_game_ids(limit=None):
     no_espn_match = []
     total_games = len(kalshi_games)
 
-    for idx, (event_ticker, t1, t2) in enumerate(kalshi_games, 1):
+    for idx, (event_ticker, t1, t2, kalshi_date) in enumerate(kalshi_games, 1):
         if limit and len(mappings) >= limit:
             print(f"\n  Reached limit of {limit} successful game mappings. Stopping.")
             break
 
         event_ticker, kalshi_team1, kalshi_team2, espn_game_id, status = \
-            _process_single_kalshi_game(event_ticker, t1, t2, espn_games)
+            _process_single_kalshi_game(event_ticker, t1, t2, kalshi_date, espn_games)
 
         aligned_ticker = event_ticker.ljust(max_ticker_width)
 
@@ -377,7 +404,7 @@ def map_kalshi_and_espn_game_ids(limit=None):
     print(f"\n  Wrote {len(mappings)} mappings to GeneratedDataFiles/{filename}")
     
     # Write unmatched games to file
-    unmatched_file = os.path.join(generated_data_dir, "unmatched_games.txt")
+    unmatched_file = os.path.join(generated_data_dir, "unmatched_kalshi_games.txt")
     with open(unmatched_file, "w") as f:
         if not_found_in_api:
             f.write(f"Games not found in Kalshi API ({len(not_found_in_api)}):\n")

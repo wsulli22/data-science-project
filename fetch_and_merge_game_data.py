@@ -158,7 +158,7 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
 
         merged = pd.merge_asof(
             kalshi[["wallclock_ts", "win_prob", "volume", "result"]].copy(),
-            espn_df[["wallclock_ts", "period", "game_elapsed_seconds"]],
+            espn_df[["wallclock_ts", "game_elapsed_seconds"]],
             on="wallclock_ts",
             direction="backward",
         ).dropna(subset=["game_elapsed_seconds"])
@@ -189,7 +189,6 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
                     "kalshi_event",
                     "team",
                     "game_elapsed_seconds",
-                    "period",
                     "win_prob_pct",
                     "volume",
                     "team_won",
@@ -305,8 +304,6 @@ def _clean_merged_data(df):
     stats["duplicates_dropped"] = before_dup - len(df)
     
     # Ensure correct data types (may introduce NaN for invalid values)
-    if "period" in df.columns:
-        df["period"] = pd.to_numeric(df["period"], errors="coerce").fillna(0).astype(int)
     df["game_elapsed_seconds"] = pd.to_numeric(df["game_elapsed_seconds"], errors="coerce")
     df["win_prob_pct"] = pd.to_numeric(df["win_prob_pct"], errors="coerce")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce")

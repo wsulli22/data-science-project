@@ -192,7 +192,7 @@ def get_list_of_all_kalshi_college_basketball_games(date=None):
               Only games on or before this date are included.
 
     Returns:
-        List of tuples: (event_ticker, team1, team2, winner) for each finished game
+        List of tuples: (event_ticker, team1, team2, winner, date) for each finished game
     """
     print(f"\nFETCHING ALL NCAAMB GAMES ON KALSHI (get_list_of_kalshi_games.py)")
     print(f"\n  This may take a few seconds...")
@@ -218,6 +218,13 @@ def get_list_of_all_kalshi_college_basketball_games(date=None):
         print(f"  Filtered to {len(filtered)} games on or before {date} (from {len(games_list)})")
         games_list = filtered
 
+    # Add dates to games and prepare for file output
+    games_with_dates = []
+    for event_ticker, team1, team2, winner in games_list:
+        game_date = _parse_date_from_ticker(event_ticker)
+        date_str = game_date.strftime("%Y-%m-%d") if game_date else ""
+        games_with_dates.append((event_ticker, team1, team2, winner, date_str))
+
     # Save to file
     script_dir = os.path.dirname(os.path.abspath(__file__))
     generated_data_dir = os.path.join(script_dir, "GeneratedDataFiles")
@@ -225,12 +232,13 @@ def get_list_of_all_kalshi_college_basketball_games(date=None):
     output_file = os.path.join(generated_data_dir, "list_of_kalshi_game.txt")
 
     with open(output_file, "w") as f:
-        for event_ticker, team1, team2, winner in games_list:
-            f.write(f"{event_ticker},{team1},{team2},{winner}\n")
+        for game in games_with_dates:
+            event_ticker, team1, team2, winner, date_str = game
+            f.write(f"{event_ticker},{team1},{team2},{winner},{date_str}\n")
 
     filename = os.path.basename(output_file)
-    print(f"\n  Wrote {len(games_list)} games to GeneratedDataFiles/{filename}")
-    return games_list
+    print(f"\n  Wrote {len(games_with_dates)} games to GeneratedDataFiles/{filename}")
+    return games_with_dates
 
 
 if __name__ == "__main__":

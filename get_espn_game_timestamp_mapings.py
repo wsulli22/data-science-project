@@ -112,6 +112,15 @@ def _fetch_all_plays(game_id: str) -> list[dict]:
                 wait = retry_backoff * (2 ** attempt)
                 logger.debug(f"ESPN request failed ({e}), retrying in {wait}s (attempt {attempt+1}/{max_retries})")
                 time.sleep(wait)
+            except requests.exceptions.HTTPError as e:
+                # Retry on server errors (500, 502, 503, 504) and rate limits (429)
+                if resp is not None and resp.status_code in [429, 500, 502, 503, 504]:
+                    wait = retry_backoff * (2 ** attempt)
+                    logger.warning(f"ESPN API returned {resp.status_code} for game {game_id}, retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                else:
+                    # Non-retryable HTTP error, re-raise
+                    raise
         else:
             # Final attempt — let it raise on any error
             resp = requests.get(base_url, params=params, timeout=20)

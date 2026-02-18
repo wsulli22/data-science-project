@@ -31,6 +31,7 @@ def _fetch_single_day(date_obj):
     """Fetch all finished games for a single date from ESPN."""
     session = create_session_with_retries()
     date_str = date_obj.strftime("%Y%m%d")
+    date_formatted = date_obj.strftime("%Y-%m-%d")
     params = {
         "dates": date_str,
         "groups": 50,
@@ -64,13 +65,14 @@ def _fetch_single_day(date_obj):
             if comp.get("winner") and abbrev:
                 winner = abbrev
 
+        # Sort teams alphabetically
         teams.sort()
         if len(teams) >= 2:
-            games.append((game_id, teams[0], teams[1], winner))
+            games.append((game_id, teams[0], teams[1], winner, date_formatted))
         elif len(teams) == 1:
-            games.append((game_id, teams[0], "", winner))
+            games.append((game_id, teams[0], "", winner, date_formatted))
         else:
-            games.append((game_id, "", "", winner))
+            games.append((game_id, "", "", winner, date_formatted))
 
     return games
 
@@ -83,7 +85,7 @@ def get_list_of_all_espn_college_basketball_games(
     Fetch all ESPN men's college basketball games between start_date and
     end_date (inclusive) using the ESPN scoreboard API.
     Returns:
-        List of tuples: (espn_game_id, team1_abbrev, team2_abbrev, winner_abbrev)
+        List of tuples: (espn_game_id, team1_abbrev, team2_abbrev, winner_abbrev, date)
         where team1 and team2 are sorted alphabetically.
     """
     print(f"\nFETCHING ALL NCAAMB ESPN GAMES SINCE KALSHI'S NCAAMB INCEPTION ({start_date}) (get_list_of_espn_games.py)")
@@ -107,6 +109,7 @@ def get_list_of_all_espn_college_basketball_games(
             all_games.extend(result)
 
     # Deduplicate by game_id (ESPN may list a game on multiple dates)
+    # Keep the first occurrence (which will have the date from when it was first seen)
     seen = set()
     unique_games = []
     for game in all_games:
@@ -123,8 +126,9 @@ def get_list_of_all_espn_college_basketball_games(
     output_file = os.path.join(generated_data_dir, "list_of_espn_games.txt")
 
     with open(output_file, "w") as f:
-        for game_id, team1, team2, winner in unique_games:
-            f.write(f"{game_id},{team1},{team2},{winner}\n")
+        for game in unique_games:
+            game_id, team1, team2, winner, date_str = game
+            f.write(f"{game_id},{team1},{team2},{winner},{date_str}\n")
 
     filename = os.path.basename(output_file)
     print(f"\n  Wrote {len(unique_games)} games to GeneratedDataFiles/{filename}")
