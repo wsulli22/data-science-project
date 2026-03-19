@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_smooth_data_heat_map.py
+smoothed_heatmap.py
 
 Reads all_games_merged_clean_GOOD.csv and produces a smoothed calibration
 heat map using a GAM (Generalized Additive Model) to smooth the data.

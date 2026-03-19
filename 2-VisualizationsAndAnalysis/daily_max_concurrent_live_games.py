@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_daily_max_concurrent_live_games.py
+daily_max_concurrent_live_games.py
 
 Plot the maximum number of concurrently "live" games per calendar day.
 

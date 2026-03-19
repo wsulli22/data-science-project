@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_accuracy_over_time.py
+accuracy_over_time.py
 
 Implements README TODO [1]:
   Bar chart of |empirical_win_rate_pct - avg_kalshi_quoted_prob_pct|

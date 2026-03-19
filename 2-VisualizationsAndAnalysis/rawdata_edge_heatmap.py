@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_raw_data_edge_heat_map.py
+rawdata_edge_heatmap.py
 
 Heat map of **signed** raw-data calibration edge over the (Kalshi prob, time) grid.
 
@@ -63,7 +63,7 @@ def generate_raw_data_edge_heat_map(
     out_dir = os.path.join(script_dir, "GeneratedDataAndVisualizations")
     os.makedirs(out_dir, exist_ok=True)
 
-    # ── binning (match make_raw_data_heat_map.py) ───────────────────────────
+    # ── binning (match rawdata_heatmap.py) ───────────────────────────
     bin_size_seconds = 2400 / num_time_bins
     time_edges = np.arange(0, 2401, bin_size_seconds)
     time_labels = [

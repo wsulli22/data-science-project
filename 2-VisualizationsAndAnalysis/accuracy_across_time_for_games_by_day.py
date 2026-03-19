@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_accuracy_across_time_for_games_by_day.py
+accuracy_across_time_for_games_by_day.py
 
 Bar chart of calibration accuracy (0–100, 100 = perfect) bucketed by week.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_smoothed_data_edge_heat_map.py
+smoothed_edge_heatmap.py
 
 Signed calibration edge heatmap:
   1. Aggregate **raw** observations into (Kalshi prob × time) cells.
@@ -47,7 +47,7 @@ def _time_bin_sort_key(time_bin_label: str) -> int:
     return int(match.group(1))
 
 
-# Match make_smooth_data_heat_map.py / make_raw_data_edge defaults
+# Match smoothed_heatmap.py / rawdata_edge_heatmap defaults
 NUM_TIME_BINS_DEFAULT = 40
 N_SPLINES_TIME = 20
 N_SPLINES_PROB = 20
@@ -87,7 +87,7 @@ def generate_smoothed_data_edge_heat_map(
     out_dir = os.path.join(script_dir, "GeneratedDataAndVisualizations")
     os.makedirs(out_dir, exist_ok=True)
 
-    # ── binning (match make_smooth_data_heat_map.py) ─────────────────────
+    # ── binning (match smoothed_heatmap.py) ─────────────────────
     time_edges = np.linspace(0, 2400, num_time_bins + 1)
     time_labels = [
         f"{int(lo / 60)}-{int(hi / 60)} min"

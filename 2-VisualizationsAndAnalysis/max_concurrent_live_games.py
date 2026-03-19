@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_max_concurrent_live_games.py
+max_concurrent_live_games.py
 
 Compute the maximum number of games that are "live" at the same time.
 

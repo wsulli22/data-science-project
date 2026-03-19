@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_game_durations.py
+game_durations.py
 
 Graphs the duration of each game using:
   duration = end_wallclock_ts - start_wallclock_ts

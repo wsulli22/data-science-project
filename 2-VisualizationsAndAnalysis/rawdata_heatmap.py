@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_heat_map.py
+rawdata_heatmap.py
 
 Reads all_games_merged_clean.csv and produces an aggregated calibration
 heat map over (game time, Kalshi win probability).
@@ -33,7 +33,7 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
     
     Saves heatmap.png to GeneratedDataFiles.
     """
-    print("\nGENERATING HEATMAP (make_heat_map.py)\n")
+    print("\nGENERATING HEATMAP (rawdata_heatmap.py)\n")
     print(f"  Using input file: {input_file}")
     
     # ── configuration ────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_games_per_day.py
+games_per_day.py
 
 Plots number of games per calendar day.
 
