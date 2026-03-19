@@ -60,6 +60,18 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
     # ── load ──────────────────────────────────────────────────────────────
     df = pd.read_csv(FILE)
 
+    # If multiple Kalshi quotes share the same game clock (game_elapsed_seconds),
+    # average the quoted probability and treat that as the quote for that clock.
+    # Grouping is per game + team because the quote/ outcome are team-specific.
+    df = df.dropna(subset=["kalshi_event", "team", "game_elapsed_seconds", "win_prob_pct", "team_won"])
+    df["clock_seconds"] = df["game_elapsed_seconds"].round(0)
+    df = (
+        df.groupby(["kalshi_event", "team", "clock_seconds"], observed=False, as_index=False)
+        .agg(win_prob_pct=("win_prob_pct", "mean"), team_won=("team_won", "first"))
+    )
+    df["game_elapsed_seconds"] = df["clock_seconds"].astype(float)
+    df = df.drop(columns=["clock_seconds"])
+
     # ── bin the data ─────────────────────────────────────────────────────
     df["time_bin"] = pd.cut(
         df["game_elapsed_seconds"],
@@ -191,4 +203,4 @@ def generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean.csv", 
 
 
 if __name__ == "__main__":
-    generateHeatMap(input_file="GeneratedDataFiles/all_games_merged_clean_GOOD.csv", num_time_bins=40)
+    generateHeatMap(input_file="../1-GatheringPreprocessingTransformation/GeneratedDataFiles/all_games_merged_clean.csv", num_time_bins=40)

@@ -82,4 +82,4 @@ All games' merged rows are concatenated and saved to `GeneratedDataFiles/all_gam
 
 #### Step 5: Generate calibration heat maps
 
-**(`make_raw_data_heat_map.py` and `make_smooth_data_heat_map.py`)**
+**(`rawdata_heatmap.py` and `smoothed_heatmap.py` in `2-VisualizationsAndAnalysis/`)**

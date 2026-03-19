@@ -75,7 +75,18 @@ def generate_raw_data_edge_heat_map(
 
     # ── load ──────────────────────────────────────────────────────────────
     df = pd.read_csv(FILE)
-    df = df.dropna(subset=["game_elapsed_seconds", "win_prob_pct", "team_won"])
+    df = df.dropna(subset=["kalshi_event", "team", "game_elapsed_seconds", "win_prob_pct", "team_won"])
+
+    # If multiple Kalshi quotes share the same game clock (game_elapsed_seconds),
+    # average the quoted probability and treat that as the quote for that clock.
+    # Grouping is per game + team because the quote/ outcome are team-specific.
+    df["clock_seconds"] = df["game_elapsed_seconds"].round(0)
+    df = (
+        df.groupby(["kalshi_event", "team", "clock_seconds"], observed=False, as_index=False)
+        .agg(win_prob_pct=("win_prob_pct", "mean"), team_won=("team_won", "first"))
+    )
+    df["game_elapsed_seconds"] = df["clock_seconds"].astype(float)
+    df = df.drop(columns=["clock_seconds"])
 
     # Time bin
     df["time_bin"] = pd.cut(

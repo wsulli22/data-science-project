@@ -25,12 +25,20 @@ from pygam import LogisticGAM, s, te
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-INPUT_FILE = "../GatheringPreprocessingTransformation/GeneratedDataFiles/all_games_merged_clean.csv"
-VISUALIZATION_DIR = "GeneratedDataAndVisualizations"  # PNG output
+INPUT_FILE = "../1-GatheringPreprocessingTransformation/GeneratedDataFiles/all_games_merged_clean.csv"
+SCRIPT_DIR = os.path.dirname(__file__)
+VISUALIZATION_DIR = os.path.join(SCRIPT_DIR, "GeneratedDataAndVisualizations")  # PNG output
 NUM_TIME_BINS = 40          # Number of time bins (1-minute bins for 40 min game)
 N_SPLINES_TIME = 20         # Number of spline basis functions for game time
 N_SPLINES_PROB = 20         # Number of spline basis functions for Kalshi prob
 MIN_OBS = 0                 # GAM predictions always exist, no masking needed
+
+
+def _resolve_input_path(input_file: str) -> str:
+    """Resolve relative paths relative to this script file."""
+    if os.path.isabs(input_file):
+        return input_file
+    return os.path.normpath(os.path.join(SCRIPT_DIR, input_file))
 
 
 def load_and_prepare_data(path):
@@ -39,23 +47,35 @@ def load_and_prepare_data(path):
     print("  SMOOTHED DATA HEATMAP GENERATOR")
     print(f"{'='*70}")
     
-    df = pd.read_csv(path)
-    print(f"\n  Loaded {len(df):,} observations from {path}")
+    resolved_path = _resolve_input_path(path)
+    df = pd.read_csv(resolved_path)
+    print(f"\n  Loaded {len(df):,} observations from {resolved_path}")
     print(f"  Unique games: {df['kalshi_event'].nunique():,}")
     
     # Create unique game identifier for potential game-level splitting
     df["game_id"] = df["kalshi_event"] + "_" + df["team"]
     
-    # Feature: Kalshi probability as fraction [0, 1]
-    df["kalshi_prob"] = df["win_prob_pct"] / 100.0
-    
-    # Feature: game time as fraction [0, 1] (0 = tip-off, 1 = end of regulation)
-    df["time_frac"] = df["game_elapsed_seconds"] / 2400.0
-    
     # Filter out invalid data
-    df = df.dropna(subset=["win_prob_pct", "game_elapsed_seconds", "team_won"])
+    df = df.dropna(subset=["kalshi_event", "team", "win_prob_pct", "game_elapsed_seconds", "team_won"])
     df = df[df["win_prob_pct"].between(1, 99)]  # Keep probabilities in 1-99% range
     df = df[df["game_elapsed_seconds"].between(0, 2400)]  # Keep within regulation time
+
+    # If multiple Kalshi quotes share the same game clock (game_elapsed_seconds),
+    # average the quoted probability and treat that as the quote for that clock.
+    # Grouping is per game + team because the quote/ outcome are team-specific.
+    df["clock_seconds"] = df["game_elapsed_seconds"].round(0)
+    df = (
+        df.groupby(["kalshi_event", "team", "clock_seconds"], observed=False, as_index=False)
+        .agg(win_prob_pct=("win_prob_pct", "mean"), team_won=("team_won", "first"))
+    )
+    df["game_elapsed_seconds"] = df["clock_seconds"].astype(float)
+    df = df.drop(columns=["clock_seconds"])
+
+    # Feature: Kalshi probability as fraction [0, 1]
+    df["kalshi_prob"] = df["win_prob_pct"] / 100.0
+
+    # Feature: game time as fraction [0, 1] (0 = tip-off, 1 = end of regulation)
+    df["time_frac"] = df["game_elapsed_seconds"] / 2400.0
     
     print(f"  After filtering: {len(df):,} observations")
     

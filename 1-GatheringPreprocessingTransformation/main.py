@@ -2,12 +2,19 @@
 
 #SETUP
 import logging
+import os
+import sys
+
+_viz_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "2-VisualizationsAndAnalysis"))
+if os.path.isdir(_viz_dir):
+    sys.path.insert(0, _viz_dir)
+
 from get_list_of_kalshi_games import get_list_of_all_kalshi_college_basketball_games
 from get_list_of_espn_games import get_list_of_all_espn_college_basketball_games
 from kalshi_espn_game_id_mapper import map_kalshi_and_espn_game_ids
 from fetch_and_merge_full_game_session_data import fetch_and_merge_all_games
-from make_raw_data_heat_map import generateHeatMap
-from make_smooth_data_heat_map import generate_smoothed_heatmap_from_file
+from rawdata_heatmap import generateHeatMap
+from smoothed_heatmap import generate_smoothed_heatmap_from_file
 logging.getLogger("get_kalshi_game_data").setLevel(logging.ERROR)
 logging.getLogger("get_espn_game_timestamp_mapings").setLevel(logging.ERROR)
 
