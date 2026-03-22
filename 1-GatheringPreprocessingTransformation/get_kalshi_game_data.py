@@ -24,7 +24,7 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
 
     Returns:
         pandas DataFrame with columns:
-            wallclock_ts       – timezone-aware datetime (UTC)
+            realworld_timestamp – timezone-aware datetime (UTC)
             end_period_ts      – unix timestamp of candlestick end
             win_prob_close     – last trade price as probability (0.0–1.0)
             win_prob_mean      – mean trade price as probability (0.0–1.0)
@@ -103,7 +103,7 @@ def get_kalshi_game_data(event_ticker: str, team_abbreviation: str) -> pd.DataFr
             oi = 0
 
         rows.append({
-            "wallclock_ts": datetime.fromtimestamp(ts, tz=timezone.utc),
+            "realworld_timestamp": datetime.fromtimestamp(ts, tz=timezone.utc),
             "end_period_ts": ts,
             "win_prob_close": win_prob_close,
             "win_prob_mean": win_prob_mean,

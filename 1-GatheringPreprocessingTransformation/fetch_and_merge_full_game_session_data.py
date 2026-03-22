@@ -8,6 +8,9 @@ Provides a pipeline used by main.py:
 """
 
 import os
+from collections import Counter
+from datetime import datetime, timezone
+
 import pandas as pd
 
 from get_kalshi_game_data import get_kalshi_game_data
@@ -23,6 +26,11 @@ from get_espn_game_timestamp_mapings import (
 
 # Team lookup (loaded once, lazily per file)
 _team_lookup_cache = {}
+
+# Hard ceiling for validation:
+# Regulation ends at 2400s, each OT adds 300s.
+# Allow up to 4OT (end at 3600s) to avoid dropping valid overtime games.
+MAX_GAME_ELAPSED_SECONDS = 2400 + 300 * 4
 
 
 def _load_team_lookup(kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game.txt"):
@@ -45,6 +53,42 @@ def _load_team_lookup(kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game.
     
     _team_lookup_cache[kalshi_games_file] = _team_lookup
     return _team_lookup
+
+
+def _load_ot_espn_game_ids(
+    espn_games_file="GeneratedDataFiles/list_of_espn_games.txt",
+):
+    """
+    Load ESPN game IDs whose `ot_period` is > 0 from list_of_espn_games.txt.
+
+    Assumes list format:
+      game_id,team1,team2,winner,slug1,slug2,date,ot_period
+    """
+    ot_game_ids = set()
+    if not os.path.exists(espn_games_file):
+        print(f"WARNING: {espn_games_file} not found; cannot filter overtime games.")
+        return ot_game_ids
+
+    with open(espn_games_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            if len(parts) < 2:
+                continue
+
+            espn_game_id = parts[0].strip()
+            ot_period = 0
+            try:
+                ot_period = int(parts[-1].strip())
+            except (ValueError, IndexError):
+                ot_period = 0
+
+            if ot_period > 0:
+                ot_game_ids.add(str(espn_game_id))
+
+    return ot_game_ids
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +121,7 @@ def _fetch_espn_df(espn_game_id):
 
         game_elapsed = _compute_game_elapsed(period_number, clock_value)
         rows.append({
-            "wallclock_ts": wallclock_ts,
+            "realworld_timestamp": wallclock_ts,
             "period": period_number,
             "clock_display": clock_display or "",
             "game_elapsed_seconds": game_elapsed,
@@ -87,12 +131,15 @@ def _fetch_espn_df(espn_game_id):
         raise ValueError(f"No valid plays parsed for game {game_id}")
 
     df = pd.DataFrame(rows)
-    df = df.drop_duplicates().sort_values("wallclock_ts").reset_index(drop=True)
+    df = df.drop_duplicates().sort_values("realworld_timestamp").reset_index(drop=True)
     before_mono = len(df)
+    # Reuse ESPN monotonicity validator, which expects wallclock_ts internally.
+    df = df.rename(columns={"realworld_timestamp": "wallclock_ts"})
     df = _validate_monotonicity(df)
+    df = df.rename(columns={"wallclock_ts": "realworld_timestamp"})
     espn_discarded = before_mono - len(df)
-    df["wallclock_ts"] = pd.to_datetime(df["wallclock_ts"]).dt.tz_localize(None)
-    df = df.sort_values("wallclock_ts").reset_index(drop=True)
+    df["realworld_timestamp"] = pd.to_datetime(df["realworld_timestamp"]).dt.tz_localize(None)
+    df = df.sort_values("realworld_timestamp").reset_index(drop=True)
 
     return df, espn_discarded
 
@@ -113,10 +160,10 @@ def _fetch_kalshi_teams(kalshi_game_id, team_lookup):
     for team in teams:
         try:
             kalshi_raw = get_kalshi_game_data(kalshi_game_id, team)
-            kalshi_raw["wallclock_ts"] = pd.to_datetime(
-                kalshi_raw["wallclock_ts"]
+            kalshi_raw["realworld_timestamp"] = pd.to_datetime(
+                kalshi_raw["realworld_timestamp"]
             ).dt.tz_localize(None)
-            kalshi_raw = kalshi_raw.sort_values("wallclock_ts").reset_index(drop=True)
+            kalshi_raw = kalshi_raw.sort_values("realworld_timestamp").reset_index(drop=True)
             results.append((team, kalshi_raw))
         except Exception as e:
             errors.append(f"{team}: {e}")
@@ -129,7 +176,9 @@ def _fetch_kalshi_teams(kalshi_game_id, team_lookup):
 def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
     """
     Merge ESPN and Kalshi data for one game (pure function, no globals).
-    Includes Kalshi candlestick data during halftime (marked with period=0).
+    Includes Kalshi candlestick data during intermissions between consecutive ESPN
+    periods (halftime and OT breaks). Candles in those gaps are pinned to the exact
+    end-of-previous-period elapsed seconds.
 
     Returns:
         (DataFrame | None, good_count, discarded_count, stale_dropped,
@@ -143,23 +192,58 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
     all_dfs = []
     total_kalshi_in_window = 0
     total_stale = 0
+    start_elapsed = float(espn_df["game_elapsed_seconds"].min())
+    start_rows = espn_df[
+        (espn_df["game_elapsed_seconds"].astype(float) - start_elapsed).abs() < 1e-9
+    ].sort_values("realworld_timestamp", kind="mergesort")
+    start_ts = start_rows["realworld_timestamp"].iloc[0] if len(start_rows) > 0 else None
+    start_period = int(start_rows["period"].iloc[0]) if len(start_rows) > 0 else None
 
-    # Identify halftime window: between end of period 1 and start of period 2
-    period1_df = espn_df[espn_df["period"] == 1]
-    period2_df = espn_df[espn_df["period"] == 2]
-    
-    halftime_start = None
-    halftime_end = None
-    if len(period1_df) > 0 and len(period2_df) > 0:
-        halftime_start = period1_df["wallclock_ts"].max()
-        halftime_end = period2_df["wallclock_ts"].min()
+    terminal_elapsed = float(espn_df["game_elapsed_seconds"].max())
+    terminal_rows = espn_df[
+        (espn_df["game_elapsed_seconds"].astype(float) - terminal_elapsed).abs() < 1e-9
+    ].sort_values("realworld_timestamp", kind="mergesort")
+    terminal_ts = terminal_rows["realworld_timestamp"].iloc[0] if len(terminal_rows) > 0 else None
+    terminal_period = int(terminal_rows["period"].iloc[0]) if len(terminal_rows) > 0 else None
+
+    def _end_elapsed_for_period(prev_period_number: int) -> float:
+        # Regulation halves are 1200s each; each OT period is 300s.
+        if prev_period_number == 1:
+            return 1200.0
+        if prev_period_number == 2:
+            return 2400.0
+        # Period 3 => OT1 end at 2700, period 4 => OT2 end at 3000, etc.
+        return 2400.0 + (prev_period_number - 2) * 300.0
+
+    # Identify intermission windows between consecutive ESPN periods.
+    # For each p where both p and p+1 exist, we take:
+    #   (last wallclock play in period p) .... (first wallclock play in period p+1)
+    # Kalshi candles inside that strict window are assigned elapsed=end(p).
+    period_values = sorted(
+        {int(p) for p in espn_df["period"].dropna().unique().tolist() if int(p) >= 1}
+    )
+    period_set = set(period_values)
+    break_windows = []
+    for p in period_values:
+        if (p + 1) not in period_set:
+            continue
+
+        p_df = espn_df[espn_df["period"] == p]
+        pnext_df = espn_df[espn_df["period"] == (p + 1)]
+        if len(p_df) == 0 or len(pnext_df) == 0:
+            continue
+
+        start_wc = p_df["realworld_timestamp"].max()
+        end_wc = pnext_df["realworld_timestamp"].min()
+        if pd.notna(start_wc) and pd.notna(end_wc) and end_wc > start_wc:
+            break_windows.append((start_wc, end_wc, p))
 
     for team_abbr, kalshi_raw in kalshi_teams:
-        game_start = espn_df["wallclock_ts"].min()
-        game_end = espn_df["wallclock_ts"].max()
+        game_start = espn_df["realworld_timestamp"].min()
+        game_end = espn_df["realworld_timestamp"].max()
         kalshi = kalshi_raw[
-            (kalshi_raw["wallclock_ts"] >= game_start)
-            & (kalshi_raw["wallclock_ts"] <= game_end)
+            (kalshi_raw["realworld_timestamp"] >= game_start)
+            & (kalshi_raw["realworld_timestamp"] <= game_end)
         ].copy().reset_index(drop=True)
 
         if len(kalshi) == 0:
@@ -167,58 +251,122 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
 
         total_kalshi_in_window += len(kalshi)
 
-        # Split Kalshi data into in-game and halftime portions
-        if halftime_start is not None and halftime_end is not None:
-            # Identify halftime Kalshi data
-            halftime_mask = (kalshi["wallclock_ts"] > halftime_start) & (kalshi["wallclock_ts"] < halftime_end)
-            halftime_kalshi = kalshi[halftime_mask].copy()
-            in_game_kalshi = kalshi[~halftime_mask].copy()
-        else:
-            halftime_kalshi = pd.DataFrame()
-            in_game_kalshi = kalshi.copy()
+        # Split Kalshi data into in-game and intermission portions.
+        # Intermission candles (halftime + OT breaks) get a pinned elapsed seconds value.
+        in_game_kalshi = kalshi.copy()
+        merged_breaks_parts = []
 
-        # Merge in-game Kalshi data with ESPN data
-        merged_in_game = pd.DataFrame(columns=["wallclock_ts", "win_prob", "volume", "result", "game_elapsed_seconds", "period"])
+        for start_wc, end_wc, prev_period in break_windows:
+            intermission_mask = (
+                (in_game_kalshi["realworld_timestamp"] > start_wc)
+                & (in_game_kalshi["realworld_timestamp"] < end_wc)
+            )
+            if not intermission_mask.any():
+                continue
+
+            intermission_kalshi = in_game_kalshi[intermission_mask].copy()
+            intermission_kalshi["game_elapsed_seconds"] = float(_end_elapsed_for_period(prev_period))
+            intermission_kalshi["period"] = 0  # Will be re-derived from elapsed seconds later
+            merged_breaks_parts.append(
+                intermission_kalshi[
+                    ["realworld_timestamp", "win_prob", "volume", "result", "game_elapsed_seconds", "period"]
+                ]
+            )
+
+            # Remove from in-game set so it doesn't get merged twice
+            in_game_kalshi = in_game_kalshi[~intermission_mask].copy()
+
+        merged_in_game = pd.DataFrame(
+            columns=["realworld_timestamp", "win_prob", "volume", "result", "game_elapsed_seconds", "period"]
+        )
         if len(in_game_kalshi) > 0:
             merged_in_game = pd.merge_asof(
-                in_game_kalshi[["wallclock_ts", "win_prob", "volume", "result"]].copy(),
-                espn_df[["wallclock_ts", "game_elapsed_seconds", "period"]],
-                on="wallclock_ts",
+                in_game_kalshi[["realworld_timestamp", "win_prob", "volume", "result"]].copy(),
+                espn_df[["realworld_timestamp", "game_elapsed_seconds", "period"]],
+                on="realworld_timestamp",
                 direction="backward",
             ).dropna(subset=["game_elapsed_seconds"])
 
-        # Handle halftime Kalshi data (mark as period=0, game_elapsed_seconds=1200)
-        merged_halftime = pd.DataFrame(columns=["wallclock_ts", "win_prob", "volume", "result", "game_elapsed_seconds", "period"])
-        if len(halftime_kalshi) > 0:
-            merged_halftime = halftime_kalshi[["wallclock_ts", "win_prob", "volume", "result"]].copy()
-            merged_halftime["game_elapsed_seconds"] = 1200.0  # End of period 1 / start of period 2
-            merged_halftime["period"] = 0  # 0 indicates halftime
+        merged_breaks = (
+            pd.concat(merged_breaks_parts, ignore_index=True) if len(merged_breaks_parts) > 0
+            else pd.DataFrame(columns=["realworld_timestamp", "win_prob", "volume", "result", "game_elapsed_seconds", "period"])
+        )
 
-        # Combine in-game and halftime data
+        # Combine in-game and intermission data
         # Filter out empty DataFrames before concatenation to avoid FutureWarning
-        dfs_to_concat = [df for df in [merged_in_game, merged_halftime] if len(df) > 0]
+        dfs_to_concat = [df for df in [merged_in_game, merged_breaks] if len(df) > 0]
         if not dfs_to_concat:
-            merged = pd.DataFrame(columns=["wallclock_ts", "win_prob", "volume", "result", "game_elapsed_seconds", "period"])
+            merged = pd.DataFrame(columns=["realworld_timestamp", "win_prob", "volume", "result", "game_elapsed_seconds", "period"])
         else:
             merged = pd.concat(dfs_to_concat, ignore_index=True)
 
         if len(merged) == 0:
             continue
 
-        # Sort by wallclock_ts to maintain chronological order
-        merged = merged.sort_values("wallclock_ts").reset_index(drop=True)
+        # Preserve initial ESPN game state (e.g., tip-off at 0s) when first
+        # minute-bucket Kalshi row starts after the first ESPN play timestamp.
+        if start_ts is not None and start_period is not None:
+            has_start_elapsed = (
+                (merged["game_elapsed_seconds"].astype(float) - start_elapsed).abs() < 1e-9
+            ).any()
+            if not has_start_elapsed:
+                start_kalshi = kalshi[kalshi["realworld_timestamp"] >= start_ts].head(1)
+                if len(start_kalshi) == 0:
+                    start_kalshi = kalshi.head(1)
+                if len(start_kalshi) > 0:
+                    start_row = start_kalshi.iloc[0]
+                    merged = pd.concat(
+                        [
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "realworld_timestamp": start_ts,
+                                        "win_prob": start_row["win_prob"],
+                                        "volume": start_row["volume"],
+                                        "result": start_row["result"],
+                                        "game_elapsed_seconds": start_elapsed,
+                                        "period": start_period,
+                                    }
+                                ]
+                            ),
+                            merged,
+                        ],
+                        ignore_index=True,
+                    )
 
-        # --- Deduplicate stale prices ---
-        # When consecutive candles have the same win_prob and zero volume,
-        # the price is just a stale repeat (no trades occurred). Collapse
-        # these runs into a single observation to avoid inflating counts.
-        before_dedup = len(merged)
-        same_prob = merged["win_prob"] == merged["win_prob"].shift()
-        zero_vol = merged["volume"] == 0
-        stale = same_prob & zero_vol
-        merged = merged[~stale].reset_index(drop=True)
-        n_stale = before_dedup - len(merged)
-        total_stale += n_stale
+        # Preserve terminal game state (e.g., period end at 2400s / OT end) even when
+        # minute-bucket Kalshi timestamps fall slightly before the final ESPN play.
+        if terminal_ts is not None and terminal_period is not None:
+            has_terminal_elapsed = (
+                (merged["game_elapsed_seconds"].astype(float) - terminal_elapsed).abs() < 1e-9
+            ).any()
+            if not has_terminal_elapsed:
+                terminal_kalshi = kalshi[kalshi["realworld_timestamp"] <= terminal_ts].tail(1)
+                if len(terminal_kalshi) > 0:
+                    terminal_row = terminal_kalshi.iloc[0]
+                    merged = pd.concat(
+                        [
+                            merged,
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "realworld_timestamp": terminal_ts,
+                                        "win_prob": terminal_row["win_prob"],
+                                        "volume": terminal_row["volume"],
+                                        "result": terminal_row["result"],
+                                        "game_elapsed_seconds": terminal_elapsed,
+                                        "period": terminal_period,
+                                    }
+                                ]
+                            ),
+                        ],
+                        ignore_index=True,
+                    )
+
+        # Sort by realworld_timestamp to maintain chronological order
+        merged = merged.sort_values("realworld_timestamp").reset_index(drop=True)
+
+        # Keep zero-volume rows so no-trade minutes remain in the timeline.
 
         merged["win_prob_pct"] = (merged["win_prob"] * 100.0).round(2)
         merged["team_won"] = (merged["result"] == "yes").astype(int)
@@ -230,7 +378,7 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
                 [
                     "kalshi_event",
                     "team",
-                    "wallclock_ts",
+                    "realworld_timestamp",
                     "game_elapsed_seconds",
                     "period",
                     "win_prob_pct",
@@ -248,9 +396,9 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
 
     result = pd.concat(all_dfs, ignore_index=True)
 
-    # Post-merge cleanup: Fix monotonicity violations and derive period from elapsed seconds
-    # Sort by game, team, and wallclock_ts to ensure chronological order
-    result = result.sort_values(["kalshi_event", "team", "wallclock_ts"]).reset_index(drop=True)
+    # Post-merge cleanup: fix monotonicity violations and finalize period labels
+    # Sort by game, team, and realworld_timestamp to ensure chronological order
+    result = result.sort_values(["kalshi_event", "team", "realworld_timestamp"]).reset_index(drop=True)
 
     # Coerce game_elapsed_seconds to float so we never have object/NaN causing all rows to drop later
     result["game_elapsed_seconds"] = pd.to_numeric(result["game_elapsed_seconds"], errors="coerce")
@@ -261,28 +409,94 @@ def _merge_espn_kalshi(espn_df, kalshi_teams, kalshi_game_id, espn_discarded):
     # Apply cummax per game/team to fix backward regressions
     result["game_elapsed_seconds"] = result.groupby(["kalshi_event", "team"])["game_elapsed_seconds"].cummax()
 
-    # Derive period from elapsed seconds (never return None so period is never all-NaN)
-    def derive_period_from_elapsed(elapsed):
-        if pd.isna(elapsed):
-            return 1  # fallback so we don't wipe all rows in cleaning
-        elapsed = float(elapsed)
-        if elapsed < 1200:
-            return 1
-        elif elapsed < 2400:
-            return 2
-        else:
-            ot_period = int((elapsed - 2400) // 300) + 1
-            return 2 + ot_period
+    def _label_and_truncate_game(g: pd.DataFrame) -> pd.DataFrame:
+        """
+        Label periods from elapsed-time boundary occurrences using game-wide
+        timestamps (shared across both teams), and truncate after the first
+        occurrence of the true game-end boundary.
 
-    result["period"] = result["game_elapsed_seconds"].apply(derive_period_from_elapsed)
+        Rules:
+        - firstHalf -> halfTime -> secondHalf from first/last occurrence of 1200.
+          secondHalf starts at the last occurrence of 1200.
+        - For OT boundaries B in [2400, 2700, 3000, ...]:
+            first..(last-1) timestamp at B => preOTk
+            last timestamp at B            => OTk
+          where k=1 for B=2400, k=2 for B=2700, etc.
+        - Truncate rows after the first occurrence of the final game-end boundary:
+            regular game end: 2400
+            1OT game end:     2700
+            2OT game end:     3000
+            ...
+        """
+        g = g.sort_values("realworld_timestamp", kind="mergesort").reset_index(drop=True)
+        elapsed = g["game_elapsed_seconds"].astype(float)
+        # Keep exactly one row per timestamp when deriving boundaries so both
+        # teams share the same phase transitions.
+        ts_frame = (
+            g[["realworld_timestamp", "game_elapsed_seconds"]]
+            .drop_duplicates(subset=["realworld_timestamp"], keep="last")
+            .sort_values("realworld_timestamp", kind="mergesort")
+            .reset_index(drop=True)
+        )
+        ts_elapsed = ts_frame["game_elapsed_seconds"].astype(float)
+        ts_labels = pd.Series(index=ts_frame.index, data="firstHalf", dtype="string")
 
-    n_before = len(result)
-    result = result[result["game_elapsed_seconds"] <= 2400].copy()
-    n_ot = n_before - len(result)
+        def _ts_indices_at(boundary: float) -> list[int]:
+            return ts_frame.index[(ts_elapsed - boundary).abs() < 1e-9].tolist()
+
+        # secondHalf starts at the last occurrence of 1200; earlier 1200 rows are halfTime.
+        idx_1200 = _ts_indices_at(1200.0)
+        if idx_1200:
+            first_1200 = idx_1200[0]
+            last_1200 = idx_1200[-1]
+            ts_labels.iloc[first_1200:last_1200] = "halfTime"
+            ts_labels.iloc[last_1200:] = "secondHalf"
+
+        max_elapsed = float(ts_elapsed.max()) if len(ts_elapsed) else 0.0
+        # Number of overtime periods present from elapsed timeline.
+        n_ot = 0 if max_elapsed <= 2400.0 else int((max_elapsed - 2400.0 - 1e-9) // 300.0) + 1
+
+        # For each OT boundary, relabel by first/last occurrence timestamp.
+        for ot_k in range(1, n_ot + 1):
+            boundary = 2400.0 + (ot_k - 1) * 300.0
+            idx_b = _ts_indices_at(boundary)
+            if not idx_b:
+                continue
+            first_b = idx_b[0]
+            last_b = idx_b[-1]
+            if first_b < last_b:
+                ts_labels.iloc[first_b:last_b] = f"preOT{ot_k}"
+            ts_labels.iloc[last_b:] = f"OT{ot_k}"
+
+        # Truncate after first occurrence of true game-end boundary.
+        final_end_boundary = 2400.0 + 300.0 * n_ot
+        idx_final_end = _ts_indices_at(final_end_boundary)
+        if idx_final_end:
+            first_end_idx = idx_final_end[0]
+            end_ts = ts_frame.loc[first_end_idx, "realworld_timestamp"]
+            g = g[g["realworld_timestamp"] <= end_ts].copy()
+
+            ts_frame = ts_frame[ts_frame["realworld_timestamp"] <= end_ts].copy()
+            ts_labels = ts_labels.loc[ts_frame.index].copy()
+
+        label_map = pd.DataFrame(
+            {
+                "realworld_timestamp": ts_frame["realworld_timestamp"].to_numpy(),
+                "period_label": ts_labels.astype(str).to_numpy(),
+            }
+        )
+        g = g.merge(label_map, on="realworld_timestamp", how="left")
+        g["period"] = g["period_label"].fillna("firstHalf")
+        g = g.drop(columns=["period_label"])
+        return g
+
+    result = _label_and_truncate_game(result).reset_index(drop=True)
 
     good = len(result)
+    # For reporting: count how many merged rows fall in overtime (elapsed > 40:00).
+    ot_before = int((result["game_elapsed_seconds"] > 2400).sum())
     discarded = (total_kalshi_in_window - good) + espn_discarded
-    return result, good, discarded, total_stale, n_ot, n_before, None
+    return result, good, discarded, total_stale, 0, ot_before, None
 
 
 def _process_single_game(kalshi_game_id, espn_game_id, team_lookup):
@@ -314,12 +528,12 @@ def _clean_merged_data(df):
     """
     Clean and validate merged data before saving.
     
-    Note: period=0 indicates halftime (Kalshi data during halftime break).
+    Note: `period` is a human-readable label (e.g. firstHalf, halfTime, secondHalf, OT1).
     
     Removes:
     - Rows with NaN in critical columns
     - Invalid win_prob_pct values (outside 0-100)
-    - Invalid game_elapsed_seconds (negative or > 2400)
+    - Invalid game_elapsed_seconds (negative or unreasonably large)
     - Invalid team_won values (not 0 or 1)
     - Duplicate rows
     
@@ -342,7 +556,7 @@ def _clean_merged_data(df):
     }
     
     # Required columns check
-    required_cols = ["kalshi_event", "team", "wallclock_ts", "game_elapsed_seconds", "period", "win_prob_pct", "volume", "team_won"]
+    required_cols = ["kalshi_event", "team", "realworld_timestamp", "game_elapsed_seconds", "period", "win_prob_pct", "volume", "team_won"]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
@@ -359,7 +573,7 @@ def _clean_merged_data(df):
 
     # Drop rows with NaN in critical columns
     before_nan = len(df)
-    df = df.dropna(subset=["win_prob_pct", "game_elapsed_seconds", "team_won", "kalshi_event", "team", "volume", "wallclock_ts", "period"])
+    df = df.dropna(subset=["win_prob_pct", "game_elapsed_seconds", "team_won", "kalshi_event", "team", "volume", "realworld_timestamp", "period"])
     stats["nan_dropped"] = before_nan - len(df)
     
     # Validate win_prob_pct: should be between 0 and 100
@@ -367,9 +581,9 @@ def _clean_merged_data(df):
     df = df[(df["win_prob_pct"] >= 0) & (df["win_prob_pct"] <= 100)]
     stats["invalid_prob_dropped"] = before_prob - len(df)
     
-    # Validate game_elapsed_seconds: should be non-negative and <= 2400 (regulation)
+    # Validate game_elapsed_seconds: should be non-negative and within a hard ceiling.
     before_time = len(df)
-    df = df[(df["game_elapsed_seconds"] >= 0) & (df["game_elapsed_seconds"] <= 2400)]
+    df = df[(df["game_elapsed_seconds"] >= 0) & (df["game_elapsed_seconds"] <= MAX_GAME_ELAPSED_SECONDS)]
     stats["invalid_time_dropped"] = before_time - len(df)
     
     # Validate team_won: should be 0 or 1
@@ -395,7 +609,7 @@ def _clean_merged_data(df):
     
     # Final check: drop any rows that became NaN after type conversion
     before_final_nan = len(df)
-    df = df.dropna(subset=["win_prob_pct", "game_elapsed_seconds", "team_won", "volume", "wallclock_ts", "period"])
+    df = df.dropna(subset=["win_prob_pct", "game_elapsed_seconds", "team_won", "volume", "realworld_timestamp", "period"])
     if before_final_nan > len(df):
         stats["nan_dropped"] += (before_final_nan - len(df))
     
@@ -404,10 +618,10 @@ def _clean_merged_data(df):
     df["win_prob_pct"] = df["win_prob_pct"].astype(float)
     df["volume"] = df["volume"].astype(float)
     df["team_won"] = df["team_won"].astype(int)
-    df["period"] = df["period"].astype(int)
-    # Keep wallclock_ts as datetime
-    if not pd.api.types.is_datetime64_any_dtype(df["wallclock_ts"]):
-        df["wallclock_ts"] = pd.to_datetime(df["wallclock_ts"])
+    df["period"] = df["period"].astype(str)
+    # Keep realworld_timestamp as datetime
+    if not pd.api.types.is_datetime64_any_dtype(df["realworld_timestamp"]):
+        df["realworld_timestamp"] = pd.to_datetime(df["realworld_timestamp"])
     
     stats["final"] = len(df)
     
@@ -418,7 +632,61 @@ def _clean_merged_data(df):
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch_and_merge_all_games(num_games, mappings_file="GeneratedDataFiles/kalshi_espn_game_mappings.csv", kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game.txt"):
+def _print_fetch_merge_issue_summary(
+    *,
+    issue_error_lines,
+    issue_no_align_lines,
+    error_reason_counts,
+    no_align_diag_counts,
+    issue_log_file,
+    total_games,
+    issue_error_count,
+    issue_no_align_count,
+):
+    """Print deferred per-game failures and aggregate counts at end of run."""
+    sep = "=" * 80
+    failed = issue_error_count + issue_no_align_count
+    ok = total_games - failed
+    print(f"\n{sep}")
+    print("FETCH / MERGE — ISSUES SUMMARY (games not merged successfully)")
+    print(sep)
+    print(
+        f"Mapped games: {total_games}  |  merged OK: {ok}  |  "
+        f"errors / no aligned data: {failed}"
+    )
+    print(f"Full per-game lines: {issue_log_file}\n")
+
+    if issue_error_count:
+        print(f"--- Processing errors ({issue_error_count}) ---")
+        for line in issue_error_lines:
+            print(line)
+        print("\nCount by error message:")
+        for msg, cnt in error_reason_counts.most_common():
+            print(f"  {cnt:>5}×  {msg}")
+        print()
+
+    if issue_no_align_count:
+        print(f"--- No merged / aligned data ({issue_no_align_count}) ---")
+        for line in issue_no_align_lines:
+            print(line)
+        print("\nCount by reason:")
+        for msg, cnt in no_align_diag_counts.most_common():
+            print(f"  {cnt:>5}×  {msg}")
+        print()
+
+    if not failed:
+        print("No processing errors and no missing aligned data.\n")
+    print(sep)
+
+
+def fetch_and_merge_all_games(
+    num_games,
+    mappings_file="GeneratedDataFiles/kalshi_espn_game_mappings.csv",
+    kalshi_games_file="GeneratedDataFiles/list_of_kalshi_game.txt",
+    overtime_games="all",
+    espn_games_file="GeneratedDataFiles/list_of_espn_games.txt",
+    issue_log_file=None,
+):
     """
     For each mapped game (up to num_games), fetch ESPN and Kalshi data
     sequentially, merge them, and save the combined result to a CSV.
@@ -429,47 +697,107 @@ def fetch_and_merge_all_games(num_games, mappings_file="GeneratedDataFiles/kalsh
                       Defaults to "GeneratedDataFiles/kalshi_espn_game_mappings.csv".
         kalshi_games_file: Path to the text file containing list of Kalshi games with teams.
                           Defaults to "GeneratedDataFiles/list_of_kalshi_game.txt".
+        overtime_games: Either "all" (default) or "only" to restrict processing to
+                        games with ot_period > 0 in list_of_espn_games.txt.
+        espn_games_file: Path to list_of_espn_games.txt used for overtime filtering.
+        issue_log_file: Path to a text file where per-game errors and no-aligned-data
+                        lines are written (same text as printed to the terminal).
+                        If None, uses GeneratedDataFiles/fetch_merge_issues.txt.
     """
     mappings = pd.read_csv(mappings_file)
+
+    if overtime_games == "only":
+        ot_game_ids = _load_ot_espn_game_ids(espn_games_file=espn_games_file)
+        mappings["espn_game_id"] = mappings["espn_game_id"].astype(str)
+        before_n = len(mappings)
+        mappings = mappings[mappings["espn_game_id"].isin(ot_game_ids)].copy()
+        print(f"Filtering to overtime games only: {before_n} -> {len(mappings)} mappings")
+
     print(f"Loading team lookup from: {kalshi_games_file}")
     team_lookup = _load_team_lookup(kalshi_games_file)
     print(f"Loaded {len(team_lookup)} games with team data")
 
     rows_to_process = list(mappings.head(num_games).iterrows())
+    if not rows_to_process:
+        print("No games to process after filtering/mapping.")
+        return
+
     max_id_width = max(len(row["kalshi_game_id"]) for _, row in rows_to_process)
     total_games = len(rows_to_process)
 
     print("\nMERGING ESPN PLAY-BY-PLAY AND KALSHI MARKET DATA (fetch_and_merge_game_data.py)\n")
 
+    if issue_log_file is None:
+        issue_log_file = os.path.join("GeneratedDataFiles", "fetch_merge_issues.txt")
+    log_dir = os.path.dirname(os.path.abspath(issue_log_file))
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
     all_merged = []
     total_ot_dropped = 0
     total_ot_before = 0
     total_stale_dropped = 0
+    issue_error_count = 0
+    issue_no_align_count = 0
+    issue_error_lines = []
+    issue_no_align_lines = []
+    error_reason_counts: Counter = Counter()
+    no_align_diag_counts: Counter = Counter()
 
-    for idx, (_, row) in enumerate(rows_to_process, 1):
-        kalshi_game_id, merged, good, discarded, stale_dropped, ot_dropped, ot_before, error, diagnostic = \
-            _process_single_game(row["kalshi_game_id"], row["espn_game_id"], team_lookup)
+    with open(issue_log_file, "w", encoding="utf-8") as issue_log:
+        issue_log.write("fetch_and_merge_all_games — errors and no aligned data\n")
+        issue_log.write(f"Started (UTC): {datetime.now(timezone.utc).isoformat()}\n")
+        issue_log.write(f"Games to process: {total_games}\n\n")
+        issue_log.flush()
 
-        kalshi_id = kalshi_game_id.ljust(max_id_width)
-        if error:
-            print(f"  ({idx}/{total_games}) Error processing {kalshi_id}: {error}")
-        elif merged is not None:
-            all_merged.append(merged)
-            total_ot_dropped += ot_dropped
-            total_ot_before += ot_before
-            total_stale_dropped += stale_dropped
-            stale_str = f", {stale_dropped} stale" if stale_dropped else ""
-            print(f"  ({idx}/{total_games}) Processed {kalshi_id} ({good} good rows, {discarded} discarded{stale_str})")
-        else:
-            diag_str = f" ({diagnostic})" if diagnostic else ""
-            print(f"  ({idx}/{total_games}) No aligned data for {kalshi_id}{diag_str}")
+        for idx, (_, row) in enumerate(rows_to_process, 1):
+            kalshi_game_id, merged, good, discarded, stale_dropped, ot_dropped, ot_before, error, diagnostic = \
+                _process_single_game(row["kalshi_game_id"], row["espn_game_id"], team_lookup)
 
-    if total_stale_dropped > 0 or total_ot_dropped > 0:
-        print()
-    if total_stale_dropped > 0:
-        print(f"  Deduplicated {total_stale_dropped} stale-price rows (zero volume, unchanged probability)")
+            kalshi_id = kalshi_game_id.ljust(max_id_width)
+            if error:
+                line = f"  ({idx}/{total_games}) Error processing {kalshi_id}: {error}"
+                issue_error_lines.append(line)
+                error_reason_counts[error] += 1
+                issue_log.write(line + "\n")
+                issue_log.flush()
+                issue_error_count += 1
+            elif merged is not None:
+                all_merged.append(merged)
+                total_ot_dropped += ot_dropped
+                total_ot_before += ot_before
+                total_stale_dropped += stale_dropped
+                print(f"  ({idx}/{total_games}) Processed {kalshi_id} ({good} good rows, {discarded} discarded)")
+            else:
+                diag_str = f" ({diagnostic})" if diagnostic else ""
+                line = f"  ({idx}/{total_games}) No aligned data for {kalshi_id}{diag_str}"
+                issue_no_align_lines.append(line)
+                no_align_diag_counts[diagnostic if diagnostic else "(no detail)"] += 1
+                issue_log.write(line + "\n")
+                issue_log.flush()
+                issue_no_align_count += 1
+
+        if no_align_diag_counts:
+            issue_log.write("\n--- Breakdown: no aligned data (by reason) ---\n")
+            for msg, cnt in no_align_diag_counts.most_common():
+                issue_log.write(f"  {cnt:>5}×  {msg}\n")
+        if error_reason_counts:
+            issue_log.write("\n--- Breakdown: processing errors (by message) ---\n")
+            for msg, cnt in error_reason_counts.most_common():
+                issue_log.write(f"  {cnt:>5}×  {msg}\n")
+        issue_log.write(
+            f"\n---\nSummary: {issue_error_count} error(s), "
+            f"{issue_no_align_count} no aligned data\n"
+        )
+        issue_log.write(f"Finished (UTC): {datetime.now(timezone.utc).isoformat()}\n")
+
     if total_ot_dropped > 0:
-        print(f"  Dropped {total_ot_dropped} overtime records ({total_ot_dropped/total_ot_before*100:.1f}%)")
+        print()
+    if total_ot_before > 0:
+        print(f"  Included {total_ot_before} overtime rows (elapsed > 2400s)")
+    elif total_ot_dropped > 0:
+        # Defensive fallback if counters are changed later.
+        print(f"  Dropped {total_ot_dropped} overtime records")
 
     if all_merged:
         combined = pd.concat(all_merged, ignore_index=True)
@@ -502,3 +830,14 @@ def fetch_and_merge_all_games(num_games, mappings_file="GeneratedDataFiles/kalsh
         print(f"\n  Saved {len(cleaned)} rows to GeneratedDataFiles/all_games_merged_clean.csv")
     else:
         print("\nNo data collected — nothing to save.")
+
+    _print_fetch_merge_issue_summary(
+        issue_error_lines=issue_error_lines,
+        issue_no_align_lines=issue_no_align_lines,
+        error_reason_counts=error_reason_counts,
+        no_align_diag_counts=no_align_diag_counts,
+        issue_log_file=os.path.abspath(issue_log_file),
+        total_games=total_games,
+        issue_error_count=issue_error_count,
+        issue_no_align_count=issue_no_align_count,
+    )

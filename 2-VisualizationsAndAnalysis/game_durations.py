@@ -3,10 +3,10 @@
 game_durations.py
 
 Graphs the duration of each game using:
-  duration = end_wallclock_ts - start_wallclock_ts
+  duration = end_realworld_timestamp - start_realworld_timestamp
 
 How the game boundaries are computed:
-  - For each `kalshi_event` (one game), take the min/max of `wallclock_ts`.
+  - For each `kalshi_event` (one game), take the min/max of `realworld_timestamp`.
   - This file likely contains multiple rows per game (one row per timestamp),
     so we aggregate down to one row per `kalshi_event` for plotting.
 """
@@ -55,19 +55,19 @@ def generate_game_durations(
     os.makedirs(out_dir, exist_ok=True)
 
     df = pd.read_csv(FILE)
-    required_cols = {"kalshi_event", "wallclock_ts"}
+    required_cols = {"kalshi_event", "realworld_timestamp"}
     missing = sorted(required_cols - set(df.columns))
     if missing:
         raise ValueError(f"Missing required columns: {missing}. Found: {list(df.columns)}")
 
-    df = df.dropna(subset=["kalshi_event", "wallclock_ts"]).copy()
-    df["wallclock_ts"] = pd.to_datetime(df["wallclock_ts"], errors="coerce")
-    df = df.dropna(subset=["wallclock_ts"])
+    df = df.dropna(subset=["kalshi_event", "realworld_timestamp"]).copy()
+    df["realworld_timestamp"] = pd.to_datetime(df["realworld_timestamp"], errors="coerce")
+    df = df.dropna(subset=["realworld_timestamp"])
 
     # Aggregate to one row per game.
     games = (
         df.groupby("kalshi_event", observed=False)
-        .agg(start_ts=("wallclock_ts", "min"), end_ts=("wallclock_ts", "max"))
+        .agg(start_ts=("realworld_timestamp", "min"), end_ts=("realworld_timestamp", "max"))
         .reset_index()
     )
     games["duration_seconds"] = (games["end_ts"] - games["start_ts"]).dt.total_seconds()

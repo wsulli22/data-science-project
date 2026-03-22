@@ -7,6 +7,7 @@
 - Hits the Kalshi markets API with `series_ticker=KXNCAAMBGAME` and paginates through all markets.
 - Groups individual team sub-markets into game-level events (each game has two sub-markets, one per team).
 - **Discarded:** Any game whose status is not `"closed"`, `"settled"`, or `"finalized"` (i.e., games still in progress or not yet started are dropped).
+- **Discarded:** Games with no resolved winner on Kalshi (no sub-market has `result == "yes"`, e.g. postponed/cancelled or still unsettled in the API response).
 - **Discarded:** Games whose ticker date is after `NEWEST_GAME_DATE_CUTOFF_DATE` (2026-02-14).
 - Saves the surviving `(event_ticker, team1, team2, winner)` tuples to `GeneratedDataFiles/list_of_kalshi_game.txt`.
 
@@ -55,7 +56,7 @@ For each mapping pair, two data fetches happen:
 **4b. Kalshi candlestick data (1-minute resolution)**
 
 - For each team in the game, fetches 1-minute candlestick market data from Kalshi covering the last 6 hours before market close.
-- Each candle gives a `wallclock_ts` (UTC) and a `win_prob` (the close price, or the previous price if no trades occurred in that minute, converted from cents to a 0.0–1.0 probability). It also carries a `result` field (`"yes"` if that team won).
+- Each candle gives a `realworld_timestamp` (UTC) and a `win_prob` (the close price, or the previous price if no trades occurred in that minute, converted from cents to a 0.0–1.0 probability). It also carries a `result` field (`"yes"` if that team won).
 
 **4c. The merge (game clock ↔ Kalshi percentage)**
 

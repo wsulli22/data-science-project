@@ -1,5 +1,6 @@
 import requests
 import os
+import re
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -56,6 +57,44 @@ def create_session_with_retries():
 # Cache for team slugs to avoid duplicate API calls
 _team_slug_cache = {}
 
+def _infer_ot_period_from_status_type(status_type: dict) -> int:
+    """
+    Infer overtime period number from ESPN status.type fields.
+
+    Examples:
+      - "Final/OT" -> 1
+      - "Final/2OT" -> 2
+      - "Final/3OT" -> 3
+    """
+    if not isinstance(status_type, dict):
+        return 0
+
+    # ESPN tends to populate "detail" and/or "shortDetail" with values like:
+    #   "Final", "Final/OT", "Final/2OT", ...
+    fields = [
+        status_type.get("detail", "") or "",
+        status_type.get("shortDetail", "") or "",
+        status_type.get("altDetail", "") or "",
+    ]
+
+    for field in fields:
+        field_str = str(field)
+        if "OT" not in field_str.upper():
+            continue
+
+        m = re.search(r"Final/(\d*)OT", field_str, flags=re.IGNORECASE)
+        if m:
+            n_str = m.group(1) or ""
+            return int(n_str) if n_str else 1
+
+        # Fallback: allow just "OT" or "2OT" without "Final/" prefix.
+        m2 = re.search(r"(\d*)OT", field_str, flags=re.IGNORECASE)
+        if m2:
+            n_str = m2.group(1) or ""
+            return int(n_str) if n_str else 1
+
+    return 0
+
 def _fetch_single_day(date_obj):
     """Fetch all finished games for a single date from ESPN."""
     session = create_session_with_retries()
@@ -81,10 +120,13 @@ def _fetch_single_day(date_obj):
 
     for event in events:
         game_id = event.get("id", "")
-        status = event.get("status", {}).get("type", {}).get("name", "")
+        status_type = event.get("status", {}).get("type", {}) or {}
+        status = status_type.get("name", "")
 
         if status != "STATUS_FINAL":
             continue
+
+        ot_period = _infer_ot_period_from_status_type(status_type)
 
         competitors = event.get("competitions", [{}])[0].get("competitors", [])
         team_data_list = []
@@ -140,12 +182,12 @@ def _fetch_single_day(date_obj):
         if len(team_data_list) >= 2:
             team1, slug1 = team_data_list[0]
             team2, slug2 = team_data_list[1]
-            games.append((game_id, team1, team2, winner, slug1, slug2, date_formatted))
+            games.append((game_id, team1, team2, winner, slug1, slug2, date_formatted, ot_period))
         elif len(team_data_list) == 1:
             team1, slug1 = team_data_list[0]
-            games.append((game_id, team1, "", winner, slug1, "", date_formatted))
+            games.append((game_id, team1, "", winner, slug1, "", date_formatted, ot_period))
         else:
-            games.append((game_id, "", "", winner, "", "", date_formatted))
+            games.append((game_id, "", "", winner, "", "", date_formatted, ot_period))
 
     return games
 
@@ -158,7 +200,7 @@ def get_list_of_all_espn_college_basketball_games(
     Fetch all ESPN men's college basketball games between start_date and
     end_date (inclusive) using the ESPN scoreboard API.
     Returns:
-        List of tuples: (espn_game_id, team1_abbrev, team2_abbrev, winner_abbrev, slug1, slug2, date)
+        List of tuples: (espn_game_id, team1_abbrev, team2_abbrev, winner_abbrev, slug1, slug2, date, ot_period)
         where team1 and team2 are sorted alphabetically.
     """
     print(f"\nFETCHING ALL NCAAMB ESPN GAMES SINCE KALSHI'S NCAAMB INCEPTION ({start_date}) (get_list_of_espn_games.py)")
@@ -198,7 +240,7 @@ def get_list_of_all_espn_college_basketball_games(
     for mid in MANUAL_ESPN_GAME_IDS:
         if mid not in existing_ids:
             # Append with empty metadata; downstream code can fill details if needed
-            unique_games.append((mid, "", "", "", "", "", ""))
+            unique_games.append((mid, "", "", "", "", "", "", 0))
             manual_added += 1
 
     if manual_added:
@@ -212,8 +254,8 @@ def get_list_of_all_espn_college_basketball_games(
 
     with open(output_file, "w") as f:
         for game in unique_games:
-            game_id, team1, team2, winner, slug1, slug2, date_str = game
-            f.write(f"{game_id},{team1},{team2},{winner},{slug1},{slug2},{date_str}\n")
+            game_id, team1, team2, winner, slug1, slug2, date_str, ot_period = game
+            f.write(f"{game_id},{team1},{team2},{winner},{slug1},{slug2},{date_str},{ot_period}\n")
 
     filename = os.path.basename(output_file)
     print(f"\n  Wrote {len(unique_games)} games to GeneratedDataFiles/{filename}")

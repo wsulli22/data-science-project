@@ -273,7 +273,7 @@ def _process_single_kalshi_game(event_ticker, kalshi_team1, kalshi_team2, kalshi
         return (event_ticker, kalshi_team1, kalshi_team2, None, "no_espn_match")
 
 
-def map_kalshi_and_espn_game_ids(limit=None):
+def map_kalshi_and_espn_game_ids(limit=None, overtime_games="all"):
     """
     Map Kalshi games to ESPN games.
     
@@ -283,6 +283,9 @@ def map_kalshi_and_espn_game_ids(limit=None):
     Args:
         limit: Optional limit on number of games to process. Stops after finding
                this many successful mappings.
+        overtime_games: Either "all" (default) or "only" to restrict ESPN games
+                         to overtime games (ot_period > 0) using
+                         GeneratedDataFiles/list_of_espn_games.txt.
     """
     print("\nFINDING ESPN MATCHES FOR EACH KALSHI GAME (kalshi_espn_game_mapper.py)")
     
@@ -328,7 +331,8 @@ def map_kalshi_and_espn_game_ids(limit=None):
         return
     
     # Load ESPN games with dates
-    # Format: game_id,team1,team2,winner,slug1,slug2,date
+    # Format (current): game_id,team1,team2,winner,slug1,slug2,date,ot_period
+    # Older formats may omit ot_period; those are treated as regulation (ot_period=0).
     espn_games = []
     try:
         with open("GeneratedDataFiles/list_of_espn_games.txt", "r") as f:
@@ -353,6 +357,17 @@ def map_kalshi_and_espn_game_ids(limit=None):
                             espn_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                         except (ValueError, IndexError):
                             pass  # Keep as None if parsing fails
+
+                    # ot_period is the last field in the current format
+                    ot_period = 0
+                    if len(parts) >= 8:
+                        try:
+                            ot_period = int(parts[-1].strip())
+                        except (ValueError, IndexError):
+                            ot_period = 0
+
+                    if overtime_games == "only" and ot_period <= 0:
+                        continue
                     
                     espn_games.append((game_id, team1, team2, winner, espn_date))
     except FileNotFoundError:
@@ -376,6 +391,14 @@ def map_kalshi_and_espn_game_ids(limit=None):
             print(f"\n  Reached limit of {limit} successful game mappings. Stopping.")
             break
 
+        # Manual correction map is a hard override.
+        espn_id_from_corrections = id_corrections.get(event_ticker)
+        if espn_id_from_corrections is not None:
+            aligned_ticker = event_ticker.ljust(max_ticker_width)
+            mappings.append((event_ticker, espn_id_from_corrections))
+            print(f"  ({idx}/{total_games}) Mapped {aligned_ticker} -> {espn_id_from_corrections} (override via mapping_id_corrections)")
+            continue
+
         event_ticker, kalshi_team1, kalshi_team2, espn_game_id, status = \
             _process_single_kalshi_game(event_ticker, t1, t2, kalshi_date, espn_games, kalshi_winner=kalshi_winner)
 
@@ -385,13 +408,8 @@ def map_kalshi_and_espn_game_ids(limit=None):
             print(f"  ({idx}/{total_games}) Skipping {event_ticker}: not found in Kalshi API")
             not_found_in_api.append((event_ticker, kalshi_team1, kalshi_team2))
         elif status == "no_espn_match":
-            espn_id_from_corrections = id_corrections.get(event_ticker)
-            if espn_id_from_corrections is not None:
-                mappings.append((event_ticker, espn_id_from_corrections))
-                print(f"  ({idx}/{total_games}) Mapped {aligned_ticker} -> {espn_id_from_corrections} (via mapping_id_corrections)")
-            else:
-                print(f"  ({idx}/{total_games}) No ESPN match found for {aligned_ticker} ({kalshi_team1} vs {kalshi_team2})")
-                no_espn_match.append((event_ticker, kalshi_team1, kalshi_team2))
+            print(f"  ({idx}/{total_games}) No ESPN match found for {aligned_ticker} ({kalshi_team1} vs {kalshi_team2})")
+            no_espn_match.append((event_ticker, kalshi_team1, kalshi_team2))
         else:
             mappings.append((event_ticker, espn_game_id))
             print(f"  ({idx}/{total_games}) Mapped {aligned_ticker} -> {espn_game_id}")

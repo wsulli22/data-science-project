@@ -27,7 +27,25 @@ EXCLUDED_EVENT_TICKERS = {
     "KXNCAAMBGAME-26JAN25SIUEVAN",
     "KXNCAAMBGAME-25DEC21PEAYUMKC",
     "KXNCAAMBGAME-25DEC15EWUUSI",
-    "KXNCAAMBGAME-26JAN25SFPANHC"
+    "KXNCAAMBGAME-26JAN25SFPANHC",
+    "KXNCAAMBGAME-26MAR06UICMURR",
+    "KXNCAAMBGAME-26JAN26WAGLIU",
+    "KXNCAAMBGAME-26JAN24ETAMNWST",
+    "KXNCAAMBGAME-26JAN12GRAMFAMU",
+    "KXNCAAMBGAME-26JAN10UTMUSI",
+    "KXNCAAMBGAME-25DEC13MSSTUTAH",
+    "KXNCAAMBGAME-25DEC13NMSUTLSA",
+    "KXNCAAMBGAME-25DEC03CBUBYU",
+    "KXNCAAMBGAME-25DEC03LSUBC",
+    "KXNCAAMBGAME-25NOV07WAGHALL",
+    "KXNCAAMBGAME-25NOV07UABNCST",
+    "KXNCAAMBGAME-25NOV03NWSTTXAM",
+    "KXNCAAMBGAME-26JAN31WEBBCHSO",
+    "KXNCAAMBGAME-26JAN02USDSF",
+    "KXNCAAMBGAME-26JAN24MVSUGRAM",
+    "KXNCAAMBGAME-26JAN24USAMRSH",
+    "KXNCAAMBGAME-26JAN25USCWIS",
+    "KXNCAAMBGAME-26JAN04ORSTWSU",
 
 
 
@@ -257,7 +275,7 @@ def get_list_of_all_kalshi_college_basketball_games(date=None):
               Only games on or before this date are included.
 
     Returns:
-        List of tuples: (event_ticker, team1, team2, winner, date, sub_title, title, team1_full, team2_full) for each finished game
+        List of tuples: (event_ticker, team1, team2, winner, date, sub_title, title, team1_full, team2_full) for each finished game with a Kalshi winner
     """
     print(f"\nFETCHING ALL NCAAMB GAMES ON KALSHI (get_list_of_kalshi_games.py)")
     print(f"\n  This may take a few seconds...")
@@ -282,6 +300,15 @@ def get_list_of_all_kalshi_college_basketball_games(date=None):
                 filtered.append(game)
         print(f"  Filtered to {len(filtered)} games on or before {date} (from {len(games_list)})")
         games_list = filtered
+
+    before_winner = len(games_list)
+    games_list = [g for g in games_list if (g[3] or "").strip()]
+    dropped_no_winner = before_winner - len(games_list)
+    if dropped_no_winner:
+        print(f"  Dropped {dropped_no_winner} game(s) with no Kalshi winner (unsettled/empty result)")
+    if not games_list:
+        print("\nNo games left after requiring a resolved winner.")
+        return []
 
     # Add dates and fetch event metadata (sub_title, title, full team names)
     print(f"\n  Fetching event metadata (sub_title, title, team names) for {len(games_list)} games...")

@@ -8,7 +8,7 @@ For each `kalshi_event` (game):
   error_pp = |empirical_win_rate% − mean(round(win_prob_pct))|
   accuracy_score_0_100 = max(0, 100 − error_pp)
 
-Games are bucketed into calendar weeks using the game's earliest `wallclock_ts`
+Games are bucketed into calendar weeks using the game's earliest `realworld_timestamp`
 (week starts Monday). The chart plots one bar per week from oldest to newest.
 """
 
@@ -48,10 +48,10 @@ def generate_accuracy_across_time_for_games_by_day(
     os.makedirs(out_dir, exist_ok=True)
 
     df = pd.read_csv(FILE)
-    df = df.dropna(subset=["kalshi_event", "wallclock_ts", "win_prob_pct", "team_won"])
+    df = df.dropna(subset=["kalshi_event", "realworld_timestamp", "win_prob_pct", "team_won"])
 
-    df["wallclock_ts"] = pd.to_datetime(df["wallclock_ts"], errors="coerce")
-    df = df.dropna(subset=["wallclock_ts"])
+    df["realworld_timestamp"] = pd.to_datetime(df["realworld_timestamp"], errors="coerce")
+    df = df.dropna(subset=["realworld_timestamp"])
 
     df["prob_int"] = df["win_prob_pct"].round(0).astype(int)
     df = df[df["prob_int"].between(1, 99)]
@@ -59,7 +59,7 @@ def generate_accuracy_across_time_for_games_by_day(
     per_game = (
         df.groupby("kalshi_event", observed=False)
         .agg(
-            game_start_ts=("wallclock_ts", "min"),
+            game_start_ts=("realworld_timestamp", "min"),
             empirical_win_rate=("team_won", "mean"),
             kalshi_avg_prob_pct=("prob_int", "mean"),
         )

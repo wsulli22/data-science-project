@@ -5,7 +5,7 @@ games_per_day.py
 Plots number of games per calendar day.
 
 Definition:
-  For each `kalshi_event` (game), compute its earliest `wallclock_ts`.
+  For each `kalshi_event` (game), compute its earliest `realworld_timestamp`.
   That earliest timestamp is bucketed to a calendar day (UTC-ish; CSV is treated as-is).
   Count unique games per day.
 """
@@ -47,13 +47,13 @@ def generate_games_per_day(
     os.makedirs(out_dir, exist_ok=True)
 
     df = pd.read_csv(FILE)
-    df = df.dropna(subset=["kalshi_event", "wallclock_ts"])
+    df = df.dropna(subset=["kalshi_event", "realworld_timestamp"])
 
-    df["wallclock_ts"] = pd.to_datetime(df["wallclock_ts"], errors="coerce")
-    df = df.dropna(subset=["wallclock_ts"])
+    df["realworld_timestamp"] = pd.to_datetime(df["realworld_timestamp"], errors="coerce")
+    df = df.dropna(subset=["realworld_timestamp"])
 
     # Per game: earliest timestamp -> day
-    game_start = df.groupby("kalshi_event", observed=False)["wallclock_ts"].min()
+    game_start = df.groupby("kalshi_event", observed=False)["realworld_timestamp"].min()
     game_day = game_start.dt.floor("D")
 
     counts = game_day.value_counts().sort_index()
