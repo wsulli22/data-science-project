@@ -7,6 +7,15 @@
 - Connor MacDonald
 - Mwayi Kashoko
 
+### Generated data (not in this repository)
+
+These CSVs are too large for GitHub and are **gitignored**. Download them from [Google Drive](https://drive.google.com/drive/folders/1wXeMrY5iFb91e7M8YvE220CNQVJ-ECXh?usp=sharing) or regenerate: run `1-GatheringPreprocessingTransformation/main.py`, then `3-PredictionModel/create_data.py`.
+
+- **`all_games_merged_clean.csv`** → `1-GatheringPreprocessingTransformation/GeneratedDataFiles/` (default path for visualizations and the interactive app).
+- **`week_1_games.csv` … `week_19_games.csv`** → `3-PredictionModel/Data/` (evaluator and minute-grouped heatmaps).
+
+You only need the **week-by-week** files under `3-PredictionModel/Data/` to run `3-PredictionModel/evaluator.py`. Most visualization scripts also need **`all_games_merged_clean.csv`**.
+
 ### Research Question
 
 How accurate are Kalshi’s live-in game win probabilities for college basketball across different stages of the game, meaning does a quoted 80% probability early in the game correspond to the same observed win rate as a quoted 80% probability late in the game, or are there systematic regions of the (game time, probability) space where the Kalshi marketplace consistently overstates or understates a team’s true chance of winning?
