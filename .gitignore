@@ -24,3 +24,7 @@ Thumbs.db
 Archived/
 0-Archived/
 
+# Generated datasets (GitHub max ~100 MB per file; regenerate locally)
+3-PredictionModel/Data/week_*_games.csv
+1-GatheringPreprocessingTransformation/GeneratedDataFiles/all_games_merged_clean.csv
+
