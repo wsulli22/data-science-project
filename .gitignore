@@ -29,5 +29,6 @@ Archived/
 3-PredictionModel/strategy_helpers.py
 
 # Generated datasets (too large for GitHub; use Drive or regenerate locally)
+3-PredictionModel/Data/
 3-PredictionModel/Data/week_*_games.csv
 1-GatheringPreprocessingTransformation/GeneratedDataFiles/all_games_merged_clean.csv
