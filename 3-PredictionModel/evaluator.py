@@ -27,7 +27,7 @@ from helper_functions import (
 # - fixed arbitrary Kalshi bet minimums (like at what percent that a game hits)
 # - fixed time into game
 # - modeled best combo at every grid point of Kalshi prob and game time
-# - risk mitigation with sell() (function written in helper file)
+# - risk mitigation with sell() (in fee_calculator)
 # - dynamic bet size based on confidence
 # - testing not by breakdown of week but for all games as a whole
 # - take into account when games are projected to start for better allocation of bankroll

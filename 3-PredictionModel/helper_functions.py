@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 from datetime import timedelta
 from heapq import heappop, heappush
@@ -8,21 +7,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from fee_calculator import sell
-
-TAKER_FEE_RATE = 0.07
-
-
-def _round_up_to_cent(amount_dollars: float) -> float:
-    return math.ceil(max(0.0, amount_dollars) * 100.0) / 100.0
-
-
-def _calculate_taker_fee_dollars(
-    contract_price_dollars: float, contract_count: float
-) -> float:
-    bounded_price = min(1.0, max(0.0, contract_price_dollars))
-    raw_fee = TAKER_FEE_RATE * contract_count * bounded_price * (1.0 - bounded_price)
-    return _round_up_to_cent(raw_fee)
+from fee_calculator import buy
 
 
 def load_week_data(data_dir: str, week_number: int) -> pd.DataFrame:
@@ -77,21 +62,6 @@ def game_status(ranges_df: pd.DataFrame, current_timestamp: pd.Timestamp) -> lis
         else:
             statuses.append(f"{game_id}: Live (started {start})")
     return statuses
-
-
-def buy(
-    game_id: str, target_bet_amount_dollars: float, contract_price_dollars: float
-) -> tuple[float, float, float, int]:
-    del game_id  # Placeholder for parity with live trading interface.
-    desired_bet_size_dollars = float(max(0.0, target_bet_amount_dollars))
-    safe_contract_price_dollars = min(1.0, max(contract_price_dollars, 0.01))
-    contract_count = int(math.floor(desired_bet_size_dollars / safe_contract_price_dollars))
-    actual_bet_size_dollars = contract_count * safe_contract_price_dollars
-    fee_size_dollars = _calculate_taker_fee_dollars(
-        safe_contract_price_dollars, contract_count
-    )
-    total_cost_of_trade = actual_bet_size_dollars + fee_size_dollars
-    return actual_bet_size_dollars, fee_size_dollars, total_cost_of_trade, contract_count
 
 
 def release_matured_settlements(
@@ -275,10 +245,11 @@ def simulate_evaluator_week_trades(
             available_bankroll_dollars,
         )
 
-        _, _, total_cost_of_trade, contract_count = buy(
+        _, _, total_cost_of_trade, contract_count, payout_if_yes = buy(
             bet["event_id"],
+            bet["selected_team_name"],
             bet_amount_dollars,
-            bet["selected_probability_pct"] / 100.0,
+            current_kalshi_prob_for_team_buying=bet["selected_probability_pct"] / 100.0,
         )
         if contract_count <= 0:
             continue
@@ -289,7 +260,7 @@ def simulate_evaluator_week_trades(
 
         available_bankroll_dollars -= total_cost_of_trade
         settlement_payout = (
-            float(contract_count)
+            payout_if_yes
             if bet["selected_team_name"] == bet["winning_team_name"]
             else 0.0
         )
