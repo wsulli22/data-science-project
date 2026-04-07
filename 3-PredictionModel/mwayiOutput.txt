@@ -1,0 +1,177 @@
+Loading 4GB dataset into optimized RAM...
+  - Week 1 loaded.
+  - Week 2 loaded.
+  - Week 3 loaded.
+  - Week 4 loaded.
+  - Week 5 loaded.
+  - Week 6 loaded.
+  - Week 7 loaded.
+  - Week 8 loaded.
+  - Week 9 loaded.
+  - Week 10 loaded.
+  - Week 11 loaded.
+  - Week 12 loaded.
+  - Week 13 loaded.
+  - Week 14 loaded.
+  - Week 15 loaded.
+  - Week 16 loaded.
+  - Week 17 loaded.
+  - Week 18 loaded.
+  - Week 19 loaded.
+/Users/mwayikashoko/Desktop/DataScience/data-science-project/.venv/lib/python3.14/site-packages/pygad/pygad.py:753: UserWarning: The percentage of genes to mutate (mutation_percent_genes=15) resulted in selecting (0) genes. The number of genes to mutate is set to 1 (mutation_num_genes=1).
+If you do not want to mutate any gene, please set mutation_type=None.
+  warnings.warn(f"The percentage of genes to mutate (mutation_percent_genes={mutation_percent_genes}) resulted in selecting ({mutation_num_genes}) genes. The number of genes to mutate is set to 1 (mutation_num_genes=1).\nIf you do not want to mutate any gene, please set mutation_type=None.")
+Starting Evolution (Single-Threaded Optimized)...
+Gen 1/150 | Best Profit: $745.91
+Gen 2/150 | Best Profit: $997.83
+Gen 3/150 | Best Profit: $2113.96
+Gen 4/150 | Best Profit: $9246.05
+Gen 5/150 | Best Profit: $9246.05
+Gen 6/150 | Best Profit: $10003.01
+Gen 7/150 | Best Profit: $10609.01
+Gen 8/150 | Best Profit: $10609.01
+Gen 9/150 | Best Profit: $10609.01
+Gen 10/150 | Best Profit: $10609.01
+Gen 11/150 | Best Profit: $11760.61
+Gen 12/150 | Best Profit: $13525.34
+Gen 13/150 | Best Profit: $13525.34
+Gen 14/150 | Best Profit: $13525.34
+Gen 15/150 | Best Profit: $14390.35
+Gen 16/150 | Best Profit: $14961.03
+Gen 17/150 | Best Profit: $15021.73
+Gen 18/150 | Best Profit: $15021.73
+Gen 19/150 | Best Profit: $15021.73
+Gen 20/150 | Best Profit: $15021.73
+Gen 21/150 | Best Profit: $15021.73
+Gen 22/150 | Best Profit: $15021.73
+Gen 23/150 | Best Profit: $15021.73
+Gen 24/150 | Best Profit: $15021.73
+Gen 25/150 | Best Profit: $15021.73
+Gen 26/150 | Best Profit: $15021.73
+Gen 27/150 | Best Profit: $16350.96
+Gen 28/150 | Best Profit: $16350.96
+Gen 29/150 | Best Profit: $16725.01
+Gen 30/150 | Best Profit: $16725.01
+Gen 31/150 | Best Profit: $16725.01
+Gen 32/150 | Best Profit: $16725.01
+Gen 33/150 | Best Profit: $16725.01
+Gen 34/150 | Best Profit: $16725.01
+Gen 35/150 | Best Profit: $16725.01
+Gen 36/150 | Best Profit: $16725.01
+Gen 37/150 | Best Profit: $16725.01
+Gen 38/150 | Best Profit: $16725.01
+Gen 39/150 | Best Profit: $16725.01
+Gen 40/150 | Best Profit: $16725.01
+Gen 41/150 | Best Profit: $16725.01
+Gen 42/150 | Best Profit: $16725.01
+Gen 43/150 | Best Profit: $16725.01
+Gen 44/150 | Best Profit: $16725.01
+Gen 45/150 | Best Profit: $16725.01
+Gen 46/150 | Best Profit: $16725.01
+Gen 47/150 | Best Profit: $16725.01
+Gen 48/150 | Best Profit: $16725.01
+Gen 49/150 | Best Profit: $16725.01
+Gen 50/150 | Best Profit: $16725.01
+Gen 51/150 | Best Profit: $16725.01
+Gen 52/150 | Best Profit: $16725.01
+Gen 53/150 | Best Profit: $16725.01
+Gen 54/150 | Best Profit: $16725.01
+Gen 55/150 | Best Profit: $16725.01
+Gen 56/150 | Best Profit: $16725.01
+Gen 57/150 | Best Profit: $16725.01
+Gen 58/150 | Best Profit: $16725.01
+Gen 59/150 | Best Profit: $16725.01
+Gen 60/150 | Best Profit: $16725.01
+Gen 61/150 | Best Profit: $16725.01
+Gen 62/150 | Best Profit: $16725.01
+Gen 63/150 | Best Profit: $16725.01
+Gen 64/150 | Best Profit: $16725.01
+Gen 65/150 | Best Profit: $16725.01
+Gen 66/150 | Best Profit: $16725.01
+Gen 67/150 | Best Profit: $16725.01
+Gen 68/150 | Best Profit: $16725.01
+Gen 69/150 | Best Profit: $16725.01
+Gen 70/150 | Best Profit: $16725.01
+Gen 71/150 | Best Profit: $16725.01
+Gen 72/150 | Best Profit: $16725.01
+Gen 73/150 | Best Profit: $16725.01
+Gen 74/150 | Best Profit: $16725.01
+Gen 75/150 | Best Profit: $16843.81
+Gen 76/150 | Best Profit: $16843.81
+Gen 77/150 | Best Profit: $16843.81
+Gen 78/150 | Best Profit: $16843.81
+Gen 79/150 | Best Profit: $16843.81
+Gen 80/150 | Best Profit: $16843.81
+Gen 81/150 | Best Profit: $16843.81
+Gen 82/150 | Best Profit: $16843.81
+Gen 83/150 | Best Profit: $16843.81
+Gen 84/150 | Best Profit: $16843.81
+Gen 85/150 | Best Profit: $16843.81
+Gen 86/150 | Best Profit: $16843.81
+Gen 87/150 | Best Profit: $16843.81
+Gen 88/150 | Best Profit: $16843.81
+Gen 89/150 | Best Profit: $16843.81
+Gen 90/150 | Best Profit: $16843.81
+Gen 91/150 | Best Profit: $16843.81
+Gen 92/150 | Best Profit: $16843.81
+Gen 93/150 | Best Profit: $16843.81
+Gen 94/150 | Best Profit: $16843.81
+Gen 95/150 | Best Profit: $16843.81
+Gen 96/150 | Best Profit: $16843.81
+Gen 97/150 | Best Profit: $16843.81
+Gen 98/150 | Best Profit: $16843.81
+Gen 99/150 | Best Profit: $16843.81
+Gen 100/150 | Best Profit: $16843.81
+Gen 101/150 | Best Profit: $16843.81
+Gen 102/150 | Best Profit: $16843.81
+Gen 103/150 | Best Profit: $16843.81
+Gen 104/150 | Best Profit: $16843.81
+Gen 105/150 | Best Profit: $16843.81
+Gen 106/150 | Best Profit: $16843.81
+Gen 107/150 | Best Profit: $16843.81
+Gen 108/150 | Best Profit: $16843.81
+Gen 109/150 | Best Profit: $16843.81
+Gen 110/150 | Best Profit: $16843.81
+Gen 111/150 | Best Profit: $16843.81
+Gen 112/150 | Best Profit: $16866.67
+Gen 113/150 | Best Profit: $16866.67
+Gen 114/150 | Best Profit: $16866.67
+Gen 115/150 | Best Profit: $16866.67
+Gen 116/150 | Best Profit: $16866.67
+Gen 117/150 | Best Profit: $16866.67
+Gen 118/150 | Best Profit: $16866.67
+Gen 119/150 | Best Profit: $16866.67
+Gen 120/150 | Best Profit: $16866.67
+Gen 121/150 | Best Profit: $16866.67
+Gen 122/150 | Best Profit: $16866.67
+Gen 123/150 | Best Profit: $16866.67
+Gen 124/150 | Best Profit: $16866.67
+Gen 125/150 | Best Profit: $16866.67
+Gen 126/150 | Best Profit: $16866.67
+Gen 127/150 | Best Profit: $16866.67
+Gen 128/150 | Best Profit: $16866.67
+Gen 129/150 | Best Profit: $16866.67
+Gen 130/150 | Best Profit: $16866.67
+Gen 131/150 | Best Profit: $16866.67
+Gen 132/150 | Best Profit: $16866.67
+Gen 133/150 | Best Profit: $16866.67
+Gen 134/150 | Best Profit: $16866.67
+Gen 135/150 | Best Profit: $16866.67
+Gen 136/150 | Best Profit: $16866.67
+Gen 137/150 | Best Profit: $16866.67
+Gen 138/150 | Best Profit: $16866.67
+Gen 139/150 | Best Profit: $16866.67
+Gen 140/150 | Best Profit: $16866.67
+Gen 141/150 | Best Profit: $16866.67
+Gen 142/150 | Best Profit: $16866.67
+Gen 143/150 | Best Profit: $16866.67
+Gen 144/150 | Best Profit: $16866.67
+Gen 145/150 | Best Profit: $16866.67
+Gen 146/150 | Best Profit: $16866.67
+Gen 147/150 | Best Profit: $16866.67
+Gen 148/150 | Best Profit: $16866.67
+Gen 149/150 | Best Profit: $16866.67
+Gen 150/150 | Best Profit: $16866.67
+
+Optimization Complete. Best Profit: $16866.67
+{'floor': np.float64(80.27193950560066), 'ceil': np.float64(99.6821869452353), 'm_el': 2320, 'x_el': 3375, 'k_fr': np.float64(0.4990081377712252), 'r_cp': np.float64(14.98228861967985)}
