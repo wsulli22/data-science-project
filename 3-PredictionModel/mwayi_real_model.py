@@ -2,15 +2,16 @@ import pygad
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from fee_calculator import buy, sell
 
 # --- CONFIGURATION ---
 DATA_DIR = Path("GeneratedDataFiles")
 STARTING_BANKROLL = 1000
 NUM_WEEKS = 19
 
-# 1. OPTIMIZED DATA LOADER (Loading into a Dictionary for O(1) Access)
+# 1. OPTIMIZED DATA LOADER
 def load_all_weeks_slim():
-    print(f"Loading 4GB dataset into optimized RAM...")
+    print(f"Loading dataset into optimized RAM...")
     all_weeks = {}
     for w in range(1, NUM_WEEKS + 1):
         path = DATA_DIR / f"week_{w}_games.csv"
@@ -34,43 +35,79 @@ def load_all_weeks_slim():
 
 ALL_DATA = load_all_weeks_slim()
 
-# 2. CORE SIMULATOR (Separated from Fitness for reuse)
+# 2. CORE SIMULATOR (8-Gene Logic)
 def simulate_week(dna_dict, week_list, bankroll):
     curr_bank = bankroll
     risk_mult = dna_dict["k_fr"] * (dna_dict["r_cp"] / 100)
     
+    # Exit Strategy Genes
+    tp_threshold = dna_dict["tp_pct"] / 100
+    sl_threshold = dna_dict["sl_pct"] / 100
+    
     for game in week_list:
         probs = game['probs']
-        # Vectorized check is fast, but we only care about the FIRST trigger
-        mask = (probs >= dna_dict["floor"]) & (probs <= dna_dict["ceil"])
-        if not np.any(mask): continue
-        
         elapsed = game['elapsed']
-        time_mask = (elapsed >= dna_dict["m_el"]) & (elapsed <= dna_dict["x_el"])
         
-        trigger = np.where(mask & time_mask)[0]
-        if trigger.size > 0:
-            idx = trigger[0]
-            bet_amt = curr_bank * risk_mult
-            # Simulating the 'buy' logic directly for speed
-            cost = bet_amt # Simplified for fitness speed
-            if cost <= curr_bank:
-                curr_bank -= cost
-                if game['won']:
-                    # Assuming ~2.0 odds for simplicity in GA; 
-                    # replace with actual price logic if available
-                    curr_bank += (cost / (probs[idx]/100)) 
+        # 1. SCAN FOR ENTRY
+        mask = (probs >= dna_dict["floor"]) & (probs <= dna_dict["ceil"]) & \
+               (elapsed >= dna_dict["m_el"]) & (elapsed <= dna_dict["x_el"])
+        
+        trigger_indices = np.where(mask)[0]
+        if trigger_indices.size > 0:
+            entry_idx = trigger_indices[0]
+            entry_prob = probs[entry_idx] / 100
+            
+            # EXECUTE BUY
+            (actual_bet, fee, total_cost, contracts, payout_if_held) = buy(
+                game_id=game['id'],
+                team_name=game['team'],
+                target_bet_amount_dollars=curr_bank * risk_mult,
+                current_kalshi_prob_for_team_buying=entry_prob
+            )
+            
+            if 0 < total_cost <= curr_bank:
+                curr_bank -= total_cost
+                position_active = True
+                
+                # 2. SCAN FOR EXIT (Check every 5th row for speed)
+                #for current_idx in range(entry_idx + 1, len(probs), 5):
+                for current_idx in range(entry_idx + 1, len(probs), 100):
+                    current_prob = probs[current_idx] / 100
+                    price_change = (current_prob - entry_prob) / entry_prob
+                    
+                    if price_change >= tp_threshold or price_change <= -sl_threshold:
+                        (dollars_out, s_fee, s_penalty) = sell(
+                            game_id=game['id'],
+                            team_name=game['team'],
+                            contract_count=contracts,
+                            current_kalshi_prob_for_team_selling=current_prob
+                        )
+                        curr_bank += dollars_out
+                        position_active = False
+                        break
+                
+                # 3. SETTLEMENT
+                if position_active:
+                    if game['won']:
+                        curr_bank += payout_if_held
+                        
     return curr_bank
 
-# 3. GLOBAL TRAINING POOL (Changes every loop)
+# 3. GLOBAL TRAINING POOL
 CURRENT_TRAINING_POOL = []
 
 def fitness_func(ga_instance, solution, solution_idx):
-    p = {"floor": solution[0], "ceil": solution[1], "m_el": solution[2], "x_el": solution[3], "k_fr": solution[4], "r_cp": solution[5]}
+    # UPDATED: Now maps 8 genes
+    p = {
+        "floor": solution[0], "ceil": solution[1], 
+        "m_el": solution[2], "x_el": solution[3], 
+        "k_fr": solution[4], "r_cp": solution[5],
+        "tp_pct": solution[6], "sl_pct": solution[7]
+    }
+    
     if p["floor"] >= p["ceil"] or p["m_el"] >= p["x_el"]: return -10000
     
     total_bank = 0
-    # Evaluate across all past weeks in the current pool
     for week_data in CURRENT_TRAINING_POOL:
         total_bank += simulate_week(p, week_data, 1000)
     return total_bank
@@ -81,45 +118,60 @@ if __name__ == "__main__":
     last_winner_dna = None
     
     print(f"\n{'WEEK':<5} | {'TRAIN PROFIT':<12} | {'REAL WORLD BANK':<15}")
-    print("-" * 40)
+    print("-" * 45)
 
     for test_week in range(3, NUM_WEEKS + 1):
-        # Update Training Pool: All weeks prior to test_week
         CURRENT_TRAINING_POOL = [ALL_DATA[w] for w in range(1, test_week)]
         
-        # Configure GA for this week
-        # Configure GA for this week
         ga_instance = pygad.GA(
-            num_generations=40,
-            num_parents_mating=5,
+            num_generations=100,
+            num_parents_mating=10,
             fitness_func=fitness_func,
-            
-            # THE FIX: Always define these so PyGAD has a fallback for Week 3
-            sol_per_pop=30,            
-            num_genes=6,               
-            
+            sol_per_pop=60,            
+            num_genes=8,
             initial_population=last_winner_dna, 
-            gene_space=[{'low': 55, 'high': 92}, {'low': 65, 'high': 100},
-                        {'low': 0, 'high': 2400}, {'low': 2401, 'high': 4800},
-                        {'low': 0.1, 'high': 0.5}, {'low': 2, 'high': 15}],
-            mutation_percent_genes=10,
-            stop_criteria="saturate_7"
+            gene_space=[
+                {'low': 55, 'high': 92},    # floor
+                {'low': 65, 'high': 100},   # ceil
+                {'low': 0, 'high': 2400},    # m_el
+                {'low': 2401, 'high': 4800}, # x_el
+                {'low': 0.05, 'high': 0.4},  # k_fr 
+                {'low': 1, 'high': 12},      # r_cp
+                {'low': 10, 'high': 80},     # tp_pct
+                {'low': 5, 'high': 40}       # sl_pct
+            ],
+            mutation_type="adaptive",
+            mutation_num_genes=[2, 1],
+            stop_criteria="saturate_12"
         )
-        
+
         ga_instance.run()
         
-        # Get Best DNA for the "Future"
+        # Get Best DNA
         sol, fit, _ = ga_instance.best_solution()
-        best_p = {"floor": sol[0], "ceil": sol[1], "m_el": sol[2], "x_el": sol[3], "k_fr": sol[4], "r_cp": sol[5]}
+        # UPDATED: Mapping all 8 genes for the Real World simulation
+        best_p = {
+            "floor": sol[0], "ceil": sol[1], "m_el": sol[2], "x_el": sol[3], 
+            "k_fr": sol[4], "r_cp": sol[5], "tp_pct": sol[6], "sl_pct": sol[7]
+        }
         
-        # Apply to the TEST WEEK (The Real World)
-        prev_bank = real_world_bankroll
+        # Apply to the TEST WEEK
         real_world_bankroll = simulate_week(best_p, ALL_DATA[test_week], real_world_bankroll)
-        
-        # WARM START: Save this population to seed next week's GA
         last_winner_dna = ga_instance.population.copy()
         
-        weekly_change = real_world_bankroll - prev_bank
-        print(f"{test_week:<5} | ${fit-1000*(test_week-1):>11.2f} | ${real_world_bankroll:>14.2f}")
+        # Calculate Train Profit (Fit - $1000 * num_weeks_in_pool)
+        train_profit = fit - (1000 * len(CURRENT_TRAINING_POOL))
+        print(f"{test_week:<5} | ${train_profit:>11.2f} | ${real_world_bankroll:>14.2f}")
 
-    print(f"\nFinal Real-World Profit: ${real_world_bankroll - STARTING_BANKROLL:.2f}")
+    # --- FINAL REPORT ---
+    print("\n" + "="*40)
+    print("  FINAL WINNING STRATEGY (WEEK 19)  ")
+    print("="*40)
+    for key, value in best_p.items():
+        unit = "%" if "pct" in key or "r_cp" in key or "floor" in key or "ceil" in key else "s"
+        print(f"{key.upper():<12}: {value:.2f}{unit}")
+
+    print("-" * 40)
+    print(f"Ending Bankroll: ${real_world_bankroll:,.2f}")
+    print(f"Total Profit:    ${real_world_bankroll - STARTING_BANKROLL:,.2f}")
+    print("="*40)
