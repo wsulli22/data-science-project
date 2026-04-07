@@ -1,0 +1,709 @@
+CONNOR MODEL GUIDE
+==================
+
+Last updated: 2026-04-07
+Primary file: 3-PredictionModel/connor_model.py
+
+
+1. WHAT THIS FILE IS TRYING TO DO
+---------------------------------
+
+`connor_model.py` is a research/backtesting pipeline for trading live Kalshi-style
+binary event contracts on college basketball games.
+
+The core idea is:
+
+1. Start from live market snapshots during a game.
+2. Learn a better estimate of each team's "true" win probability than the current
+   market quote.
+3. Bet only when the model thinks the market is mispriced enough to overcome fees,
+   bankroll limits, and execution constraints.
+4. Evaluate the resulting trading strategy in a way that tries to mimic real usage
+   as closely as possible without having the full order book.
+
+This is not just a classifier and it is not just a betting simulator.
+It is a combined system with three layers:
+
+- a data-processing layer
+- a probability-model layer
+- a strategy/execution layer
+
+
+2. HIGH-LEVEL PIPELINE
+----------------------
+
+At a high level, the file does this:
+
+1. Load weekly CSV files such as `week_1_games.csv`, `week_2_games.csv`, etc.
+2. Downsample each game to one row every N game-seconds.
+3. Convert each game row into two team-centric rows:
+   one for team 1 and one for team 2.
+4. Build market-state features such as quote, volume, momentum, time remaining,
+   period flags, opening-line drift, and volatility.
+5. For each future week, train only on prior weeks and predict that week.
+6. Convert those predicted win probabilities into trading decisions.
+7. Simulate bankroll usage, fees, fills, settlement timing, and optional early exits.
+8. Report profit, bet count, hit rate, and a Sharpe-like risk-adjusted score.
+
+
+3. THE DATA THIS MODEL EXPECTS
+------------------------------
+
+The script expects weekly files that look like:
+
+- `week_1_games.csv`
+- `week_2_games.csv`
+- ...
+- `week_19_games.csv`
+
+Each raw row should contain one game state with both teams on the row. Important
+columns include:
+
+- `kalshi_event`
+- `realworld_timestamp`
+- `game_elapsed_seconds`
+- `period`
+- `team_1`, `team_2`
+- `team_1_win_prob_pct`, `team_2_win_prob_pct`
+- `team_1_volume`, `team_2_volume`
+- `winning_team`
+
+The code then turns each row into two team-level examples:
+
+- one example from team 1's perspective
+- one example from team 2's perspective
+
+That matters because the model is ultimately learning:
+
+"At this exact point in the game, given the market quote and current game/market
+state, what is the probability that THIS team wins?"
+
+
+4. HOW THE DATA IS TRANSFORMED
+------------------------------
+
+The function `sample_week_snapshots(...)` is where most of the important feature
+engineering happens.
+
+Important transformations:
+
+- Downsampling:
+  The raw data is grouped into buckets such as every 60, 120, or 300 game-seconds.
+  The model uses the last row in each bucket.
+
+- Team-centric expansion:
+  Each original row becomes two rows, one for each team.
+
+- Outcome label:
+  `team_won = 1` if the row's team eventually wins the game, else `0`.
+
+- Time features:
+  The code computes elapsed fraction, seconds remaining in regulation, seconds
+  remaining in the current half, and seconds since the current period began.
+
+- Market movement features:
+  It tracks 1-step, 3-step, and 5-step quote changes, plus absolute momentum and
+  short-term quote volatility.
+
+- Liquidity features:
+  It uses team volume, opponent volume, total volume, and log-scaled versions.
+
+- Opening-line context:
+  It keeps the team's opening quote and how far the current quote has drifted from it.
+
+- Period features:
+  It encodes whether the row is in first half, halftime, second half, pre-overtime,
+  or overtime.
+
+
+5. MODEL FEATURES
+-----------------
+
+The live model currently uses the following feature family:
+
+- current quote and opponent quote
+- quote centered around 50%
+- quote gap between the two teams
+- opening quote and opening quote gap
+- game elapsed time and elapsed fraction
+- seconds remaining in regulation
+- seconds remaining in the current half
+- seconds since the current period started
+- first-half / halftime / second-half / pre-OT / OT flags
+- log volume for both teams
+- total volume and volume share
+- opening-line drift
+- 1-step / 3-step / 5-step momentum
+- absolute momentum
+- recent quote volatility
+- volume change
+- quote x elapsed interaction
+
+Two things are worth noticing:
+
+1. The model is not using team identity directly.
+   It is mostly trying to learn from market state, not from whether a team is Duke,
+   Purdue, etc.
+
+2. The opening quote is important.
+   It acts as a compact proxy for pregame relative team strength and market consensus.
+
+
+6. THE PROBABILITY MODEL
+------------------------
+
+The current predictive model is a gradient boosting classifier.
+
+Implementation details:
+
+- model type: `GradientBoostingClassifier`
+- it trains on the engineered features above
+- the target is `team_won`
+
+The current code actually blends two models:
+
+- a full-history model trained on all prior weeks
+- a recent-history model trained on only the most recent few prior weeks
+
+Those two predictions are blended together to help with possible regime drift.
+
+In plain English:
+
+- the full-history model gives stability
+- the recent-history model gives adaptability
+- the blend tries to get the best of both
+
+
+7. THE "SURFACE" MODEL
+----------------------
+
+Besides the gradient boosting model, the file also builds a simple historical
+probability surface.
+
+This surface is based on:
+
+- quote bucket
+- time bucket
+
+It answers a question like:
+
+"Historically, when the market said roughly X% at roughly this point in the game,
+how often did that team actually win?"
+
+This gives a second probability estimate:
+
+- `surface_true_prob`
+
+The strategy can either:
+
+- use the ML model only
+- use the surface only indirectly as a filter
+- blend both into a single decision probability
+
+This is useful because the surface is simple, stable, and interpretable, while the
+ML model is richer but easier to overfit.
+
+
+8. HOW BETTING DECISIONS ARE MADE
+---------------------------------
+
+The model does not bet on every row. It uses a strict filter.
+
+The rough decision logic is:
+
+1. Only consider rows in tradeable periods.
+   Right now that mainly means first half and second half.
+
+2. Require the quote to fall inside a configured range.
+
+3. Require the current quote to beat a minimum opening quote threshold.
+
+4. Require the game clock to be inside a valid window.
+
+5. Require enough liquidity/volume on both sides.
+
+6. Require enough model edge:
+   `decision_true_prob - quoted_prob`
+
+7. Require the edge to persist for multiple rows, not just appear once.
+
+8. Reject highly noisy states with too much sudden momentum or volatility.
+
+9. Size the bet based on bankroll, flat sizing, and a Kelly-style term.
+
+10. Skip the trade if the expected profit or expected ROI is too small.
+
+This means the system is intentionally selective.
+
+That is by design.
+The project learned pretty quickly that "bet more often" was not automatically
+better once fees and noise were included.
+
+
+9. EXECUTION MODES
+------------------
+
+There are currently two main execution assumptions:
+
+1. `taker`
+   The strategy buys immediately at the current quote.
+
+2. `maker_lite`
+   The strategy pretends to place a passive limit order slightly below the current
+   quote and only gets filled if the market trades down to that level within a
+   short horizon.
+
+This is a simplified approximation of exchange behavior.
+It is not a full order-book simulator.
+
+In the runs done so far, the optimizer often still preferred `taker`, which suggests
+that the value was not simply "we should be more passive."
+
+
+10. BANKROLL AND SETTLEMENT MODEL
+---------------------------------
+
+This file simulates bankroll in a more realistic way than a naive weekly reset.
+
+Important behaviors:
+
+- bankroll is consumed when a trade is opened
+- capital is released only when the position settles or is sold
+- settlement is delayed by a small buffer
+- bankroll rolls forward through evaluation weeks
+
+This matters because two equally accurate strategies can behave very differently if:
+
+- one ties up capital for too long
+- one over-concentrates bankroll
+- one triggers too many overlapping trades
+
+
+11. EARLY EXITS / SELLS
+-----------------------
+
+The code supports optional early exits, but they are mostly conservative and are not
+the main path right now.
+
+Possible exit ideas in the code:
+
+- take profit
+- stop loss
+- edge flip
+- max hold time
+
+However, this area is still weaker than the rest of the simulator because we do not
+have a true order book or full microstructure. So by default, the most trusted path
+is still closer to "enter carefully, then hold unless there is a simple reason not to."
+
+
+12. EVALUATION MODES
+--------------------
+
+There are now two different evaluation modes.
+
+A. `rolling` mode
+
+This is the more honest mode.
+
+What it does:
+
+- use the first few weeks only as model warm-up
+- for each next test week:
+  - tune strategy parameters using only earlier evaluation weeks
+  - freeze those parameters
+  - test on exactly one future week
+
+This is a true expanding-window backtest.
+It is the best protection against overfitting that currently exists in the file.
+
+B. `static` mode
+
+This is a more descriptive mode.
+
+What it does:
+
+- use a fixed training warm-up
+- split the remaining weeks into tuning weeks and holdout weeks
+- search for the best parameters on the tuning portion
+- report the result on holdout
+
+This is still useful, but it is less trustworthy than rolling mode because one
+parameter set can be optimized against a long slice of the season.
+
+C. `replay` mode
+
+This is the lightweight comparison mode.
+
+What it does:
+
+- skip Optuna entirely
+- choose one named preset
+- replay that exact preset over the selected evaluation weeks
+
+This is the right mode when you want to answer a question like:
+
+"If we lock strategy X and just run it over weeks 5-19, how does it do?"
+
+This mode is much faster than a full search, especially after the walk-forward
+prediction cache already exists.
+
+
+13. DEFAULT BEHAVIOR
+--------------------
+
+Important defaults as of this version:
+
+- default evaluation mode: `rolling`
+- default train warm-up weeks: `4`
+- default rolling tuning warm-up weeks: `4`
+- default sample cadence: `60` seconds
+- default Optuna trials: `150`
+- default starting bankroll: `$100,000`
+
+If you run the script with no arguments:
+
+`python 3-PredictionModel/connor_model.py`
+
+you get the honest rolling evaluation by default.
+
+
+14. USEFUL COMMANDS
+-------------------
+
+Run the default honest rolling evaluation:
+
+`python 3-PredictionModel/connor_model.py`
+
+Run a faster rolling smoke test:
+
+`python 3-PredictionModel/connor_model.py --evaluation-mode rolling --max-weeks 6 --min-train-weeks 3 --rolling-min-tune-weeks 2 --sample-seconds 120 --n-trials 7 --min-total-bets 5`
+
+Run a static tuning/holdout experiment:
+
+`python 3-PredictionModel/connor_model.py --evaluation-mode static --max-weeks 10 --min-train-weeks 4 --holdout-weeks 2 --n-trials 20`
+
+Run a descriptive full-season search/replay:
+
+`python 3-PredictionModel/connor_model.py --evaluation-mode static --max-weeks 19 --min-train-weeks 4 --holdout-weeks 0 --n-trials 20`
+
+Run a fixed-preset replay over weeks 5-19:
+
+`python 3-PredictionModel/connor_model.py --evaluation-mode replay --replay-preset best_recent_honest --max-weeks 19 --min-train-weeks 4 --replay-start-week 5`
+
+Notes:
+
+- Results are printed to stdout.
+- Cached snapshots and walk-forward predictions are stored under:
+  `3-PredictionModel/.cache/connor_model/`
+- The first full-season run is slow because it has to build the cache.
+  Later reruns are much faster.
+
+
+15. WHAT THE OUTPUT MEANS
+-------------------------
+
+The file prints three kinds of information:
+
+1. Prediction quality by week
+   This is the Brier score for the model's probability predictions.
+   Lower is better.
+
+2. Strategy summaries by week
+   For each week, it prints:
+   - profit
+   - number of bets
+   - number of sold-early positions
+   - weekly return
+
+3. Aggregate summary
+   It prints:
+   - total profit
+   - total bets
+   - total sold early
+   - hit rate
+   - positive weeks
+   - Sharpe-like score
+
+The Sharpe-like score is not a textbook finance Sharpe ratio.
+It is a simplified risk-adjusted score based on weekly returns and a volatility floor.
+It is useful for ranking strategies, not for pretending we built an institutional
+performance report.
+
+
+16. CURRENT ASSUMPTIONS
+-----------------------
+
+These assumptions matter a lot:
+
+- The data already contains valid live win-probability quotes.
+- The model learns from market state, not deep basketball game context.
+- Opening quote carries much of the pregame strength information.
+- A single global model can generalize across many games and teams.
+- The order book is not modeled explicitly.
+- `maker_lite` is only a lightweight approximation of passive fills.
+- Fees are modeled in a simplified way through the fee helper.
+- Sell behavior is less trustworthy than buy-and-hold behavior.
+- Capital release is approximated using settlement buffers.
+- The strategy is evaluated at the chosen sampling cadence, not tick-by-tick.
+
+
+17. WHAT THIS MODEL DOES WELL
+-----------------------------
+
+Things the current version does better than the earlier rough prototype:
+
+- strict walk-forward model training
+- much stronger feature engineering
+- support for rolling out-of-sample evaluation
+- support for multiple execution assumptions
+- bankroll-aware trade sizing
+- caching of expensive preprocessing and prediction work
+- more disciplined selectivity instead of blindly betting everything
+
+
+18. WHAT THIS MODEL DOES NOT DO YET
+-----------------------------------
+
+Important limitations:
+
+- no full order-book simulation
+- no true slippage model beyond simplified execution assumptions
+- no deep game-state features such as score differential or possession-level context
+- no explicit team embeddings / roster knowledge / injuries
+- no portfolio-level optimizer across simultaneous candidate trades
+- no strong statistical confidence interval around season profit
+
+So if someone else picks this up, they should think of it as:
+
+"a serious research backtester with realistic intent"
+
+not:
+
+"a finished trading engine"
+
+
+19. HOW OVERFITTING IS CURRENTLY CONTROLLED
+-------------------------------------------
+
+The file tries to fight overfitting in several ways:
+
+- the predictive model is trained only on prior weeks
+- rolling mode tunes the strategy only on earlier evaluation weeks and tests on the
+  next unseen week
+- the strategy objective penalizes weak or unstable behavior
+- the strategy can require a minimum number of bets so it does not win by luck on
+  one or two trades
+- the surface model provides a simpler sanity check against the richer ML model
+
+This is good, but not perfect.
+
+The biggest thing to remember is:
+
+Static tuning results are always less trustworthy than rolling out-of-sample results.
+
+
+20. CURRENT KNOWN RESULTS
+-------------------------
+
+These are the important completed results at the time this guide was written.
+
+A. Honest rolling result on weeks 1-8
+
+Configuration:
+
+- mode: rolling
+- weeks loaded: 1-8
+- model warm-up: weeks 1-4
+- tuning warm-up: weeks 5-6
+- test weeks: 7-8
+- sample cadence: 60 seconds
+- trials: 7
+
+Result:
+
+- week 7 profit: +$688.64 on 4 bets
+- week 8 profit: +$942.05 on 6 bets
+- total profit: +$1,630.69
+- total bets: 10
+- hit rate: 100.00%
+- positive weeks: 2 / 2
+- Sharpe-like: 3.2485
+
+Interpretation:
+
+This is encouraging, but still a small sample.
+It is the strongest honest result seen so far, not proof that the strategy is solved.
+
+
+B. Smaller rolling smoke test on weeks 1-6
+
+Configuration:
+
+- mode: rolling
+- sample cadence: 120 seconds
+
+Result:
+
+- week 6 profit: +$17.27 on 7 bets
+- hit rate: 71.43%
+- Sharpe-like: 0.0691
+
+Interpretation:
+
+This was mostly a functional sanity check, not a major benchmark.
+
+
+C. Tiny proof-of-life test on weeks 1-5
+
+Configuration:
+
+- mode: rolling
+- sample cadence: 300 seconds
+
+Result:
+
+- total profit: -$1,290.93 across weeks 4-5
+
+Interpretation:
+
+This was only used to verify that the new rolling evaluator worked end-to-end.
+
+
+D. Full-season descriptive replay
+
+Configuration:
+
+- mode: static
+- sample cadence: 300 seconds
+- weeks scored: 5-19
+- tuning used the same scored span
+
+Result:
+
+- total profit: +$1,142.97
+- total bets: 11
+- hit rate: 81.82%
+- Sharpe-like: 0.1940
+
+Interpretation:
+
+This is descriptive and optimistic, not a clean out-of-sample result.
+It tells us the season contains some opportunity under coarse sampling, but it is
+not the number to trust most.
+
+
+E. Full-season fixed-preset replay using the best recent honest preset
+
+Configuration:
+
+- mode: replay
+- preset: `best_recent_honest`
+- underlying preset: `NO_SURFACE_HIGH_CONVICTION_PARAMS`
+- sample cadence: 300 seconds
+- weeks scored: 5-19
+
+Result:
+
+- total profit: -$844.14
+- total bets: 3
+- hit rate: 33.33%
+- Sharpe-like: -0.2254
+
+Interpretation:
+
+This is a much more honest "lock one preset and let it ride" test than the static
+season-wide search above, and it did not generalize well on the full season.
+That is a sign that the strategy is still fragile.
+
+
+21. HOW TO INTERPRET RESULTS WITHOUT FOOLING YOURSELF
+-----------------------------------------------------
+
+If a strategy looks great in one mode, ask:
+
+- Was this rolling or static?
+- How many weeks were truly unseen?
+- How many bets were made?
+- Were profits concentrated in one week?
+- Did it survive different sample cadences?
+- Did it depend on one unusual execution mode?
+
+Good practice:
+
+- trust rolling results more than static results
+- trust larger time spans more than shorter ones
+- trust stable moderate performance more than one explosive lucky week
+
+
+22. WHAT I WOULD TRY NEXT
+-------------------------
+
+If another student or model takes over, these are sensible next steps:
+
+1. Add a true fixed-parameter replay mode.
+   This will make "use this exact strategy over weeks 5-19" much faster.
+
+2. Save and load named parameter presets.
+   That makes comparisons reproducible.
+
+3. Add confidence bands around performance.
+   Right now profit can be reported without enough uncertainty language.
+
+4. Improve execution realism.
+   A better passive fill and slippage model would help a lot.
+
+5. Compare multiple model families.
+   For example:
+   - logistic baseline
+   - gradient boosting
+   - residual-to-market model
+   - ensemble variants
+
+6. Add a cleaner experiment log.
+   Right now many results live in terminal output rather than a saved table.
+
+
+23. SIMPLE MENTAL MODEL OF THE FILE
+-----------------------------------
+
+If you only remember one thing, remember this:
+
+The script is trying to answer:
+
+"Given a live Kalshi quote during a game, can we estimate the team's true win chance
+better than the market and convert that edge into profitable, risk-aware trades?"
+
+The ML model answers the first half.
+The strategy simulator answers the second half.
+
+Both parts matter.
+A good predictor can still lose money with bad execution.
+A sharp execution layer cannot save a model with no edge.
+
+
+24. FINAL TAKEAWAY
+------------------
+
+`connor_model.py` is currently best understood as a serious experimental trading
+research pipeline.
+
+It is much better than the earlier rough version because it now has:
+
+- real feature engineering
+- walk-forward training
+- rolling out-of-sample evaluation
+- bankroll-aware simulation
+- some execution realism
+
+But it should still be treated as:
+
+- promising
+- testable
+- improvable
+
+not:
+
+- final
+- production-ready
+- proven over a full season yet

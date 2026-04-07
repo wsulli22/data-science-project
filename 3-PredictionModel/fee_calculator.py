@@ -11,24 +11,30 @@ def _usd2(x: float) -> float:
     return float(Decimal(str(float(x))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _total_buy_cost(contract_count: int, contract_price_dollars: float) -> float:
+def _total_buy_cost(
+    contract_count: int,
+    contract_price_dollars: float,
+    fee_rate: float = FEE_RATE,
+) -> float:
     """Notional + taker fee, cent-rounded (same as a filled ``buy``)."""
     if contract_count <= 0:
         return _usd2(0.0)
     actual = _usd2(contract_count * contract_price_dollars)
-    fee = fee_calculator(contract_count, contract_price_dollars)
+    fee = fee_calculator(contract_count, contract_price_dollars, fee_rate=fee_rate)
     return _usd2(actual + fee)
 
 
 def _max_contracts_for_kalshi_budget(
-    total_budget_dollars: float, contract_price_dollars: float
+    total_budget_dollars: float,
+    contract_price_dollars: float,
+    fee_rate: float = FEE_RATE,
 ) -> int:
     """Largest whole contract count such that total debit ≤ budget (Kalshi-style sizing)."""
     b = _usd2(max(0.0, total_budget_dollars))
     if b <= 0.0:
         return 0
     n = 0
-    while _total_buy_cost(n + 1, contract_price_dollars) <= b:
+    while _total_buy_cost(n + 1, contract_price_dollars, fee_rate=fee_rate) <= b:
         n += 1
     return n
 
@@ -42,14 +48,18 @@ def fee_calculator(contract_count, contract_price, fee_rate=FEE_RATE):
     return _usd2(math.ceil(100 * fee_rate * notional * (1 - contract_price)) / 100)
 
 
-def kalshi_trade_sizes(kalshi_probability, bet_amount_dollars):
+def kalshi_trade_sizes(kalshi_probability, bet_amount_dollars, fee_rate=FEE_RATE):
     """
     Buy path: ``bet_amount_dollars`` is max total debit (notional + fee), like Kalshi's order budget.
     """
     p = min(1.0, max(float(kalshi_probability), 0.01))
-    contract_count = _max_contracts_for_kalshi_budget(bet_amount_dollars, p)
+    contract_count = _max_contracts_for_kalshi_budget(
+        bet_amount_dollars,
+        p,
+        fee_rate=fee_rate,
+    )
     bet_size_dollars = _usd2(contract_count * p)
-    fee_size_dollars = fee_calculator(contract_count, p)
+    fee_size_dollars = fee_calculator(contract_count, p, fee_rate=fee_rate)
     total_cost_of_trade = _usd2(bet_size_dollars + fee_size_dollars)
     return contract_count, bet_size_dollars, fee_size_dollars, total_cost_of_trade
 
@@ -59,6 +69,7 @@ def buy(
     team_name: str,
     target_bet_amount_dollars: float,
     current_kalshi_prob_for_team_buying: float,
+    fee_rate: float = FEE_RATE,
 ) -> tuple[float, float, float, int, float]:
     """
     ``target_bet_amount_dollars`` is the most you will debit for the fill (contracts +
@@ -72,9 +83,14 @@ def buy(
     contract_count = _max_contracts_for_kalshi_budget(
         float(max(0.0, target_bet_amount_dollars)),
         contract_price_dollars,
+        fee_rate=fee_rate,
     )
     actual_bet_size_dollars = _usd2(contract_count * contract_price_dollars)
-    fee_size_dollars = fee_calculator(contract_count, contract_price_dollars)
+    fee_size_dollars = fee_calculator(
+        contract_count,
+        contract_price_dollars,
+        fee_rate=fee_rate,
+    )
     total_cost_of_trade = _usd2(actual_bet_size_dollars + fee_size_dollars)
     payout_if_yes_dollars = _usd2(float(contract_count))  # $1 per contract if side settles Yes
     return (
