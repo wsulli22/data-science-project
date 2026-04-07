@@ -1,0 +1,45 @@
+Loading 4GB dataset into optimized RAM...
+  - Week 1 cached.
+  - Week 2 cached.
+  - Week 3 cached.
+  - Week 4 cached.
+  - Week 5 cached.
+  - Week 6 cached.
+  - Week 7 cached.
+  - Week 8 cached.
+  - Week 9 cached.
+  - Week 10 cached.
+  - Week 11 cached.
+  - Week 12 cached.
+  - Week 13 cached.
+  - Week 14 cached.
+  - Week 15 cached.
+  - Week 16 cached.
+  - Week 17 cached.
+  - Week 18 cached.
+  - Week 19 cached.
+
+WEEK  | TRAIN PROFIT | REAL WORLD BANK
+----------------------------------------
+/Users/mwayikashoko/Desktop/DataScience/data-science-project/.venv/lib/python3.14/site-packages/pygad/pygad.py:753: UserWarning: The percentage of genes to mutate (mutation_percent_genes=10) resulted in selecting (0) genes. The number of genes to mutate is set to 1 (mutation_num_genes=1).
+If you do not want to mutate any gene, please set mutation_type=None.
+  warnings.warn(f"The percentage of genes to mutate (mutation_percent_genes={mutation_percent_genes}) resulted in selecting ({mutation_num_genes}) genes. The number of genes to mutate is set to 1 (mutation_num_genes=1).\nIf you do not want to mutate any gene, please set mutation_type=None.")
+3     | $     965.85 | $        621.25
+4     | $     591.15 | $        684.63
+5     | $     703.24 | $        988.04
+6     | $    1186.60 | $        670.33
+7     | $    1291.18 | $        648.32
+8     | $    1260.20 | $        808.43
+9     | $    1511.80 | $        632.57
+10    | $    1613.42 | $       1037.40
+11    | $    2371.07 | $       1009.75
+12    | $    2446.29 | $        676.08
+13    | $    2158.23 | $        598.90
+14    | $    2639.97 | $        574.59
+15    | $    2599.38 | $       1055.84
+16    | $    3588.13 | $       1117.04
+17    | $    3801.26 | $       1527.31
+18    | $    7775.14 | $       3321.24
+19    | $    8949.70 | $       5000.20
+
+Final Real-World Profit: $4000.20
