@@ -32,3 +32,8 @@ Archived/
 3-PredictionModel/Data/
 3-PredictionModel/Data/week_*_games.csv
 1-GatheringPreprocessingTransformation/GeneratedDataFiles/all_games_merged_clean.csv
+Data/
+
+# Local caches and logs
+3-PredictionModel/.cache/
+3-PredictionModel/overnight_rolling_19w_120s.log

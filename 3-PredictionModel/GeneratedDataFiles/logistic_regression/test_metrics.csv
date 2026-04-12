@@ -1,0 +1,2 @@
+roc_auc,log_loss,brier_score,baseline_kalshi_roc_auc,baseline_kalshi_log_loss,baseline_kalshi_brier_score,n_test_rows,n_test_games
+0.9141317190756517,0.36487957834382667,0.11964014744263034,0.9141120796655553,0.36525129730965195,0.11953904643117691,84986,1030
