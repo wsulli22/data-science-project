@@ -12,7 +12,7 @@ Walk-forward cross-validation prevents look-ahead bias:
     cell from historical data, enabling Kelly-style bet sizing.
   - Weeks 1 and 2 are used only as training data; testing starts at week 3.
 
-Bankroll: $1,000 per week (resets each week, treated independently).
+Bankroll: $1000 per week (resets each week, treated independently).
 
 NEW PARAMETERS vs. BASELINE evaluator.py
 -----------------------------------------
@@ -30,7 +30,7 @@ NEW PARAMETERS vs. BASELINE evaluator.py
 USAGE
 -----
   pip install optuna pandas numpy
-  python optimizer.py
+  python ben-modified-by-will.py
 
   The script expects week_1_games.csv … week_19_games.csv to live in a
   subdirectory called "Data/" relative to this file (same layout as evaluator.py).
@@ -40,13 +40,28 @@ OUTPUT
   Prints a per-week walk-forward summary for the best trial, then the
   optimal parameter set, then reruns that set explicitly so you can
   copy the parameters straight into evaluator.py.
+
+CHANGES FROM ben_model.py
+-------------------------
+  1. _buy() now matches fee_calculator.buy() — target_dollars is the max total
+     debit (notional + fee), not just notional.  Uses iterative sizing so the
+     contract count respects the budget inclusive of fees.
+  2. Momentum filter uses actual elapsed-time differences instead of treating
+     row indices as seconds.
+  3. All dollar amounts routed through _usd2() (Decimal ROUND_HALF_UP) to match
+     fee_calculator.py's financial rounding.
+  4. Payout rounded to cents for parity with the evaluator.
+  5. Volume filter is skipped from Optuna search when no volume column exists
+     in the data, avoiding wasted optimisation budget.
 """
 
 from __future__ import annotations
 
 import math
+import time
 import warnings
 from datetime import timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from heapq import heappop, heappush
 from pathlib import Path
 from typing import Optional
@@ -64,17 +79,18 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 DATA_DIRECTORY = Path(__file__).resolve().parent / "Data"
 
 NUM_WEEKS = 19
-STARTING_BANKROLL = 1_000.0           # dollars, resets each week
+STARTING_BANKROLL = 1000.0            # dollars, resets each week
 SETTLEMENT_BUFFER_SECONDS = 2 * 60 * 60
 TAKER_FEE_RATE = 0.07
 
 # Optimisation
 N_OPTUNA_TRIALS = 500                  # increase for more thorough search
+N_OPTUNA_WORKERS = 10                  # parallel Optuna workers (threads)
 OPTUNA_SEED = 42
 MIN_TRAIN_WEEKS = 2                    # need at least this many weeks before testing
 
 # Degenerate-solution guard: penalise if fewer bets made across all test weeks
-MIN_TOTAL_BETS_REQUIRED = 10
+MIN_TOTAL_BETS_REQUIRED = 0
 
 # Calibration surface resolution
 # Edges are right-exclusive except the last bucket which catches everything above
@@ -85,32 +101,51 @@ N_PROB_BINS = len(PROB_BIN_EDGES)
 N_TIME_BINS = len(TIME_BIN_EDGES)
 
 
-# ── Fee helpers (mirror helper_functions.py exactly) ──────────────────────────
+# ── Fee helpers (matching fee_calculator.py exactly) ─────────────────────────
 
-def _round_up_cent(x: float) -> float:
-    return math.ceil(max(0.0, x) * 100) / 100
+def _usd2(x: float) -> float:
+    """Financial-style rounding to cents (half-up), matching fee_calculator.py."""
+    return float(Decimal(str(float(x))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _taker_fee(price: float, contracts: int) -> float:
     p = min(1.0, max(0.0, price))
-    return _round_up_cent(TAKER_FEE_RATE * contracts * p * (1.0 - p))
+    notional = contracts * p
+    return _usd2(math.ceil(100 * TAKER_FEE_RATE * notional * (1.0 - p)) / 100)
+
+
+def _total_buy_cost(contracts: int, price: float) -> float:
+    if contracts <= 0:
+        return _usd2(0.0)
+    actual = _usd2(contracts * price)
+    fee = _taker_fee(price, contracts)
+    return _usd2(actual + fee)
 
 
 def _buy(target_dollars: float, contract_price: float) -> tuple[float, float, int]:
     """
-    Returns (actual_stake, fee, contract_count).
-    Mirrors the buy() function in helper_functions.py.
+    Budget-aware buy matching fee_calculator.buy(): target_dollars is the max
+    total debit (notional + fee).  Iteratively finds the largest contract count
+    whose total cost fits within budget.
     """
     price = min(1.0, max(0.01, contract_price))
-    contracts = int(math.floor(target_dollars / price))
+    budget = _usd2(max(0.0, target_dollars))
+    if budget <= 0.0:
+        return 0.0, 0.0, 0
+    contracts = 0
+    while _total_buy_cost(contracts + 1, price) <= budget:
+        contracts += 1
     if contracts <= 0:
         return 0.0, 0.0, 0
-    stake = contracts * price
+    stake = _usd2(contracts * price)
     fee = _taker_fee(price, contracts)
     return stake, fee, contracts
 
 
 # ── Data loading and preprocessing ────────────────────────────────────────────
+
+_HAS_VOLUME_DATA = False  # set at load time; controls whether Optuna tunes min_volume
+
 
 def _detect_volume_column(df: pd.DataFrame) -> Optional[str]:
     """Find the volume column; returns None if not present."""
@@ -130,7 +165,9 @@ def load_and_preprocess_weeks(data_dir: Path) -> list[list[dict]]:
     Returns a list of 19 elements (one per week); each element is a list of
     game-dicts (one per game in that week).
     """
+    global _HAS_VOLUME_DATA
     all_weeks: list[list[dict]] = []
+    found_volume = False
 
     for w in range(1, NUM_WEEKS + 1):
         path = data_dir / f"week_{w}_games.csv"
@@ -141,6 +178,8 @@ def load_and_preprocess_weeks(data_dir: Path) -> list[list[dict]]:
         ).reset_index(drop=True)
 
         vol_col = _detect_volume_column(df)
+        if vol_col is not None:
+            found_volume = True
         week_games: list[dict] = []
 
         for event_id, grp in df.groupby("kalshi_event", sort=False):
@@ -170,6 +209,10 @@ def load_and_preprocess_weeks(data_dir: Path) -> list[list[dict]]:
 
         all_weeks.append(week_games)
         print(f"  Loaded week {w:>2d}: {len(week_games):3d} games")
+
+    _HAS_VOLUME_DATA = found_volume
+    if not found_volume:
+        print("  [NOTE] No volume column found in data — min_volume filter disabled.")
 
     return all_weeks
 
@@ -244,6 +287,24 @@ def build_surface(
     total_wins   = np.zeros((N_PROB_BINS, N_TIME_BINS))
     total_counts = np.zeros((N_PROB_BINS, N_TIME_BINS))
     for wins, counts in contributions[:up_to_week_idx]:
+        total_wins   += wins
+        total_counts += counts
+    return np.where(total_counts > 0, total_wins / total_counts, np.nan)
+
+
+def build_surface_excluding_week(
+    contributions: list[tuple[np.ndarray, np.ndarray]],
+    exclude_week_idx: int,
+) -> np.ndarray:
+    """
+    Aggregate win/count arrays from all weeks except exclude_week_idx and return
+    the empirical win-rate surface. Cells with no data are NaN.
+    """
+    total_wins   = np.zeros((N_PROB_BINS, N_TIME_BINS))
+    total_counts = np.zeros((N_PROB_BINS, N_TIME_BINS))
+    for i, (wins, counts) in enumerate(contributions):
+        if i == exclude_week_idx:
+            continue
         total_wins   += wins
         total_counts += counts
     return np.where(total_counts > 0, total_wins / total_counts, np.nan)
@@ -332,8 +393,8 @@ def find_first_bet(
     1. game_elapsed_seconds in [min_elapsed_s, max_elapsed_s]
     2. At least one team's probability crosses UP through prob_floor
     3. That team's probability is <= prob_ceiling
-    4. Probability has risen by >= min_momentum_pp over the last momentum_window_s rows
-       (rows ≈ seconds in the per-second data)
+    4. Probability has risen by >= min_momentum_pp over the last momentum_window_s
+       of actual elapsed game time
     5. Volume >= min_volume
     6. When kelly_fraction > 0: estimated true win prob > Kalshi price (positive edge)
     """
@@ -348,7 +409,7 @@ def find_first_bet(
     ceiling = params["prob_ceiling"]
     min_el  = params["min_elapsed_s"]
     max_el  = params["max_elapsed_s"]
-    win_s   = int(params["momentum_window_s"])
+    win_s   = float(params["momentum_window_s"])
     min_mom = params["min_momentum_pp"]
     min_vol = params["min_volume"]
 
@@ -356,8 +417,6 @@ def find_first_bet(
     clock_ok = (elapsed >= min_el) & (elapsed <= max_el)
 
     # ── 2. Threshold crossing (upward) ────────────────────────────────────────
-    # Treat the very first row as crossing from 0 (allows betting immediately if
-    # conditions are met and prob already above floor at game start).
     prev_p1 = np.empty(n)
     prev_p1[0] = 0.0
     prev_p1[1:] = p1[:-1]
@@ -373,28 +432,30 @@ def find_first_bet(
     # ── 3. Ceiling gate (per-team) ─────────────────────────────────────────────
     t1_ceil_ok = p1 <= ceiling
     t2_ceil_ok = p2 <= ceiling
-    # A crossing is valid if the crossing team is also below the ceiling.
-    # When both cross: at least one must be below ceiling.
     ceiling_ok = (
         (t1_cross & t1_ceil_ok)
         | (t2_cross & t2_ceil_ok)
     )
 
-    # ── 4. Momentum filter ─────────────────────────────────────────────────────
+    # ── 4. Momentum filter (using actual elapsed time, not row indices) ───────
     if min_mom > 0.0 and win_s > 0:
-        p1_past = np.empty(n)
-        p2_past = np.empty(n)
-        p1_past[:win_s] = np.nan
-        p2_past[:win_s] = np.nan
-        p1_past[win_s:] = p1[:n - win_s]
-        p2_past[win_s:] = p2[:n - win_s]
+        p1_past = np.full(n, np.nan)
+        p2_past = np.full(n, np.nan)
 
-        # nan comparisons evaluate to False in numpy — correct behaviour here
+        for i in range(n):
+            target_time = elapsed[i] - win_s
+            if target_time < 0:
+                continue
+            # Find the last row at or before (elapsed[i] - window) via binary search
+            j = np.searchsorted(elapsed[:i + 1], target_time, side="right") - 1
+            if j >= 0:
+                p1_past[i] = p1[j]
+                p2_past[i] = p2[j]
+
         with np.errstate(invalid="ignore"):
             p1_mom_ok = (p1 - p1_past) >= min_mom
             p2_mom_ok = (p2 - p2_past) >= min_mom
 
-        # Valid only if the crossing team has sufficient momentum
         momentum_ok = (t1_cross & p1_mom_ok) | (t2_cross & p2_mom_ok)
     else:
         momentum_ok = np.ones(n, dtype=bool)
@@ -414,11 +475,9 @@ def find_first_bet(
 
     # ── 6. Kelly / edge check (first candidate that passes) ───────────────────
     for i in candidate_indices:
-        # Determine which team to bet on
         t1_ok = bool(t1_cross[i]) and bool(t1_ceil_ok[i])
         t2_ok = bool(t2_cross[i]) and bool(t2_ceil_ok[i])
 
-        # Choose higher-probability team when both qualify
         if t1_ok and t2_ok:
             if p1[i] >= p2[i]:
                 bet_team, bet_prob = game["team_1"], p1[i]
@@ -468,14 +527,12 @@ def simulate_week(
     Run one week of the strategy.  Returns a summary dict.
     One bet per game maximum.  FIFO bankroll with 2-hour settlement buffer.
     """
-    # Collect candidate bets (one per game)
     candidates: list[dict] = []
     for game in week_games:
         bet = find_first_bet(game, params, surface)
         if bet is not None:
             candidates.append(bet)
 
-    # Sort by bet time (ascending) to respect bankroll FIFO ordering
     candidates.sort(key=lambda b: (b["bet_ts"], b["event_id"]))
 
     bankroll = STARTING_BANKROLL
@@ -484,20 +541,19 @@ def simulate_week(
     total_profit = 0.0
 
     for bet in candidates:
-        # Release matured settlements before this bet's timestamp
         while pending and pending[0][0] <= bet["bet_ts"]:
             _, payout, _ = heappop(pending)
             bankroll += payout
 
         stake, fee, contracts = _buy(bet["bet_size"], bet["prob_pct"] / 100.0)
-        total_cost = stake + fee
+        total_cost = _usd2(stake + fee)
 
         if contracts <= 0 or total_cost > bankroll:
             skipped += 1
             continue
 
         bankroll -= total_cost
-        payout = float(contracts) if bet["bet_team"] == bet["winner"] else 0.0
+        payout = _usd2(float(contracts)) if bet["bet_team"] == bet["winner"] else 0.0
         release_ts = bet["game_end_ts"] + timedelta(seconds=SETTLEMENT_BUFFER_SECONDS)
         heappush(pending, (release_ts, payout, bet["event_id"]))
 
@@ -509,12 +565,12 @@ def simulate_week(
         else:
             losses += 1
 
-    # Flush all remaining settlements
     while pending:
         _, payout, _ = heappop(pending)
         bankroll += payout
 
     return {
+        "games":       len(week_games),
         "profit":      bankroll - STARTING_BANKROLL,
         "bets":        total_bets,
         "wins":        wins,
@@ -533,11 +589,8 @@ def make_objective(
     """
     Returns a closure that Optuna calls for each trial.
 
-    Walk-forward schedule:
-      - Test week 3  → train on weeks 1–2
-      - Test week 4  → train on weeks 1–3
-      - …
-      - Test week 19 → train on weeks 1–18
+    Leave-one-week-out schedule over test weeks 3..19:
+      - Test week N → train on all weeks except week N
     """
     first_test_week = MIN_TRAIN_WEEKS + 1   # 1-indexed
 
@@ -545,19 +598,21 @@ def make_objective(
         # ── Sample parameters ──────────────────────────────────────────────────
         prob_floor = trial.suggest_float("prob_floor", 55.0, 92.0)
 
-        # Ceiling must be strictly above floor; cap so range is always valid
         ceil_lo = min(prob_floor + 3.0, 98.0)
         prob_ceiling = trial.suggest_float("prob_ceiling", ceil_lo, 99.0)
 
         min_elapsed = trial.suggest_int("min_elapsed_s", 0, 2400, step=60)
 
-        # Max elapsed must be above min; cap at 4800 (covers ~2 OT periods)
         max_el_lo = min(min_elapsed + 300, 4800)
         max_elapsed = trial.suggest_int("max_elapsed_s", max_el_lo, 4800, step=60)
 
         momentum_window = trial.suggest_int("momentum_window_s", 30, 600, step=30)
         min_momentum    = trial.suggest_float("min_momentum_pp", 0.0, 20.0)
-        min_volume      = trial.suggest_float("min_volume", 0.0, 1000.0)
+
+        if _HAS_VOLUME_DATA:
+            min_volume = trial.suggest_float("min_volume", 0.0, 1000.0)
+        else:
+            min_volume = 0.0
 
         kelly_fraction  = trial.suggest_float("kelly_fraction", 0.0, 1.0)
         kelly_cap_pct   = trial.suggest_float("kelly_cap_pct", 2.0, 50.0)
@@ -581,8 +636,8 @@ def make_objective(
         total_bets   = 0
 
         for test_week_num in range(first_test_week, NUM_WEEKS + 1):
-            train_idx  = test_week_num - 1          # weeks 0..(train_idx-1) are training
-            surface    = build_surface(contributions, train_idx)
+            test_idx   = test_week_num - 1
+            surface    = build_surface_excluding_week(contributions, test_idx)
             week_games = all_weeks[test_week_num - 1]
             result     = simulate_week(week_games, params, surface)
             total_profit += result["profit"]
@@ -605,46 +660,69 @@ def run_best_params(
     contributions: list[tuple[np.ndarray, np.ndarray]],
 ) -> None:
     """
-    Re-run walk-forward evaluation with the best params and print a detailed
+    Re-run leave-one-week-out evaluation with the best params and print a detailed
     week-by-week breakdown.
     """
     first_test_week = MIN_TRAIN_WEEKS + 1
     total_profit = 0.0
-    total_bets = total_wins = total_losses = 0
+    total_games = total_bets = total_wins = total_losses = 0
 
     print("\n" + "=" * 60)
-    print("WALK-FORWARD DETAIL  (best parameter set)")
+    print("LEAVE-ONE-WEEK-OUT DETAIL  (best parameter set)")
     print("=" * 60)
     print(
-        f"{'Week':>4}  {'Bets':>4}  {'W':>4}  {'L':>4}  "
-        f"{'Profit':>10}  {'End Bank':>10}  {'Win%':>6}"
+        f"{'Week':>4}  {'Games':>5}  {'Bets':>4}  {'W':>4}  {'L':>4}  "
+        f"{'Acc%':>6}  {'ROI/G all%':>10}  {'ROI/G bet%':>10}  {'Profit':>10}"
     )
     print("-" * 60)
 
     for test_week_num in range(first_test_week, NUM_WEEKS + 1):
-        train_idx  = test_week_num - 1
-        surface    = build_surface(contributions, train_idx)
+        test_idx   = test_week_num - 1
+        surface    = build_surface_excluding_week(contributions, test_idx)
         week_games = all_weeks[test_week_num - 1]
         r          = simulate_week(week_games, params, surface)
 
-        win_pct = 100.0 * r["wins"] / r["bets"] if r["bets"] > 0 else float("nan")
+        win_pct = 100.0 * r["wins"] / r["bets"] if r["bets"] > 0 else 0.0
+        roi_per_game_all = (
+            (r["profit"] / STARTING_BANKROLL) * 100.0 / r["games"]
+            if r["games"] > 0
+            else 0.0
+        )
+        roi_per_game_bet = (
+            (r["profit"] / STARTING_BANKROLL) * 100.0 / r["bets"]
+            if r["bets"] > 0
+            else 0.0
+        )
         total_profit += r["profit"]
+        total_games  += r["games"]
         total_bets   += r["bets"]
         total_wins   += r["wins"]
         total_losses += r["losses"]
 
         print(
-            f"{test_week_num:>4}  {r['bets']:>4}  {r['wins']:>4}  {r['losses']:>4}  "
-            f"${r['profit']:>9.2f}  ${r['final_bank']:>9.2f}  {win_pct:>5.1f}%"
+            f"{test_week_num:>4}  {r['games']:>5}  {r['bets']:>4}  {r['wins']:>4}  {r['losses']:>4}  "
+            f"{win_pct:>5.1f}%  {roi_per_game_all:>9.3f}%  {roi_per_game_bet:>9.3f}%  "
+            f"${r['profit']:>9.2f}"
         )
 
     overall_win_pct = (
-        100.0 * total_wins / total_bets if total_bets > 0 else float("nan")
+        100.0 * total_wins / total_bets if total_bets > 0 else 0.0
+    )
+    overall_roi_per_game_all = (
+        (total_profit / STARTING_BANKROLL) * 100.0 / total_games
+        if total_games > 0
+        else 0.0
+    )
+    overall_roi_per_game_bet = (
+        (total_profit / STARTING_BANKROLL) * 100.0 / total_bets
+        if total_bets > 0
+        else 0.0
     )
     print("-" * 60)
     print(
-        f"{'TOT':>4}  {total_bets:>4}  {total_wins:>4}  {total_losses:>4}  "
-        f"${total_profit:>9.2f}  {'':>10}  {overall_win_pct:>5.1f}%"
+        f"{'TOT':>4}  {total_games:>5}  {total_bets:>4}  {total_wins:>4}  {total_losses:>4}  "
+        f"{overall_win_pct:>5.1f}%  {overall_roi_per_game_all:>9.3f}%  "
+        f"{overall_roi_per_game_bet:>9.3f}%  ${total_profit:>9.2f}"
     )
 
     n_test_weeks = NUM_WEEKS - first_test_week + 1
@@ -653,8 +731,11 @@ def run_best_params(
 
     print("\n── Summary ─────────────────────────────────────────────")
     print(f"  Test weeks evaluated : {n_test_weeks}")
+    print(f"  Total games observed : {total_games}")
     print(f"  Total bets placed    : {total_bets}")
     print(f"  Overall win rate     : {overall_win_pct:.1f}%")
+    print(f"  Avg ROI per game (all games) : {overall_roi_per_game_all:.3f}%")
+    print(f"  Avg ROI per game (bets only) : {overall_roi_per_game_bet:.3f}%")
     print(f"  Total profit         : ${total_profit:.2f}")
     print(f"  Average weekly profit: ${avg_profit:.2f}")
     print(f"  ROI on bankroll      : {roi:.2f}%")
@@ -663,8 +744,9 @@ def run_best_params(
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    _script_start = time.perf_counter()
     print("=" * 60)
-    print("Kalshi NCAAB Betting Strategy Optimiser")
+    print("Ben's Kalshi NCAAB Betting Strategy Optimiser (with modifications by Will)")
     print("=" * 60)
 
     # 1. Load data
@@ -677,7 +759,7 @@ def main() -> None:
     print("  Done.")
 
     # 3. Run Bayesian optimisation
-    print(f"\n[3/4] Running Optuna optimisation ({N_OPTUNA_TRIALS} trials) …")
+    print(f"\n[3/4] Running Optuna optimisation ({N_OPTUNA_TRIALS} trials, {N_OPTUNA_WORKERS} workers) …")
     print("  (This may take several minutes — progress shown every 50 trials)\n")
 
     sampler = optuna.samplers.TPESampler(seed=OPTUNA_SEED)
@@ -685,7 +767,6 @@ def main() -> None:
 
     objective = make_objective(all_weeks, contributions)
 
-    # Progress callback
     def _callback(study: optuna.Study, trial: optuna.Trial) -> None:
         if (trial.number + 1) % 50 == 0:
             print(
@@ -693,7 +774,12 @@ def main() -> None:
                 f"best profit so far: ${study.best_value:.2f}"
             )
 
-    study.optimize(objective, n_trials=N_OPTUNA_TRIALS, callbacks=[_callback])
+    study.optimize(
+        objective,
+        n_trials=N_OPTUNA_TRIALS,
+        n_jobs=N_OPTUNA_WORKERS,
+        callbacks=[_callback],
+    )
 
     # 4. Report results
     print("\n[4/4] Optimisation complete.\n")
@@ -712,7 +798,10 @@ def main() -> None:
     print(f"  # max_elapsed_s (stop betting after)    = {best['max_elapsed_s']}")
     print(f"  # momentum_window_s                     = {best['momentum_window_s']}")
     print(f"  # min_momentum_pp                       = {best['min_momentum_pp']:.2f}")
-    print(f"  # min_volume                            = {best['min_volume']:.1f}")
+    if _HAS_VOLUME_DATA:
+        print(f"  # min_volume                            = {best['min_volume']:.1f}")
+    else:
+        print(f"  # min_volume                            = N/A (no volume data)")
     print(f"  # kelly_fraction  (0 = flat sizing)     = {best['kelly_fraction']:.3f}")
     print(f"  # kelly_cap_pct   (% of bankroll cap)   = {best['kelly_cap_pct']:.1f}")
     print(f"  # flat_bet_pct    (% bankroll flat bet)  = {best['flat_bet_pct']:.1f}")
@@ -734,6 +823,13 @@ def main() -> None:
             f"min_el={int(row['params_min_elapsed_s'])}  "
             f"kelly={row['params_kelly_fraction']:.2f}"
         )
+
+    elapsed = time.perf_counter() - _script_start
+    if elapsed >= 60:
+        mins, secs = divmod(elapsed, 60)
+        print(f"\n── Total wall time: {int(mins)}m {secs:.1f}s ({elapsed:.2f}s)")
+    else:
+        print(f"\n── Total wall time: {elapsed:.2f}s")
 
 
 if __name__ == "__main__":
