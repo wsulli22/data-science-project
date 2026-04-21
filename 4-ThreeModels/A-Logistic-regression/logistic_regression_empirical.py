@@ -332,18 +332,46 @@ def save_calibration_plot(
     baseline_calibration: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1, label="Perfect calibration")
+    fg = "#000000"
+    label_color = "#e8e8e8"
+    grid_color = "#333333"
+    fig, ax = plt.subplots(figsize=(8, 6), facecolor=fg)
+    ax.set_facecolor(fg)
+    for spine in ax.spines.values():
+        spine.set_color(grid_color)
+    ax.tick_params(colors=label_color)
+    ax.xaxis.label.set_color(label_color)
+    ax.yaxis.label.set_color(label_color)
+    ax.title.set_color(label_color)
+    ax.grid(True, linestyle=":", linewidth=0.6, color=grid_color, alpha=0.9)
+    ax.set_axisbelow(True)
+
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        linestyle="--",
+        color="#888888",
+        linewidth=1,
+        label="Perfect calibration",
+    )
     ax.plot(
         model_calibration["mean_predicted_prob"],
         model_calibration["empirical_win_rate"],
         marker="o",
+        color="#5eb3ff",
+        markerfacecolor="#5eb3ff",
+        markeredgecolor="#0a1628",
+        markeredgewidth=0.6,
         label="Logistic regression",
     )
     ax.plot(
         baseline_calibration["mean_predicted_prob"],
         baseline_calibration["empirical_win_rate"],
         marker="o",
+        color="#ffb04a",
+        markerfacecolor="#ffb04a",
+        markeredgecolor="#1a0f00",
+        markeredgewidth=0.6,
         label="Raw Kalshi quote",
     )
     ax.set_xlabel("Predicted win probability")
@@ -351,9 +379,11 @@ def save_calibration_plot(
     ax.set_title("Holdout calibration")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.legend()
+    legend = ax.legend(facecolor="#121212", edgecolor=grid_color)
+    for text in legend.get_texts():
+        text.set_color(label_color)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200)
+    fig.savefig(output_path, dpi=200, facecolor=fg, edgecolor=fg)
     plt.close(fig)
 
 

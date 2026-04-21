@@ -37,3 +37,6 @@ Data/
 # Local caches and logs
 3-PredictionModel/.cache/
 3-PredictionModel/overnight_rolling_19w_120s.log
+
+# Local collaborator notes
+Ben, Connor, Mwayi, Will.txt

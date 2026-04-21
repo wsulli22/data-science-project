@@ -1,0 +1,125 @@
+~/Desktop/Class/Data Science/Project/3-PredictionModel (on main x? branch): python ben-modified-by-will.py --trials 20 --workers 10
+============================================================
+Ben's Kalshi NCAAB Betting Strategy Optimiser (with modifications by Will)
+============================================================
+  Optuna: 20 trials, 10 workers
+
+[1/4] Loading weekly data files …
+  Loaded week  1: 236 games
+  Loaded week  2: 175 games
+  Loaded week  3: 177 games
+  Loaded week  4: 183 games
+  Loaded week  5: 145 games
+  Loaded week  6: 236 games
+  Loaded week  7: 308 games
+  Loaded week  8: 113 games
+  Loaded week  9: 384 games
+  Loaded week 10: 347 games
+  Loaded week 11: 325 games
+  Loaded week 12: 346 games
+  Loaded week 13: 342 games
+  Loaded week 14: 338 games
+  Loaded week 15: 335 games
+  Loaded week 16: 349 games
+  Loaded week 17: 339 games
+  Loaded week 18: 307 games
+  Loaded week 19: 161 games
+
+[2/4] Precomputing calibration surface contributions …
+  Done.
+
+[3/4] Running Optuna optimisation (20 trials, 10 workers) …
+  (One line per trial as each worker finishes; completion order can be out of order.)
+
+  [ 1/20] trial #6     COMPLETE   objective=$195.77       best=$195.77       (2620.1s)  ThreadPoolExecutor-0_6
+  [ 2/20] trial #7     COMPLETE   objective=$281.86       best=$281.86       (2629.9s)  ThreadPoolExecutor-0_7
+  [ 3/20] trial #3     COMPLETE   objective=$961.02       best=$961.02       (2633.9s)  ThreadPoolExecutor-0_3
+  [ 4/20] trial #8     COMPLETE   objective=$323.55       best=$961.02       (2676.5s)  ThreadPoolExecutor-0_8
+  [ 5/20] trial #1     COMPLETE   objective=$-1257.23     best=$961.02       (2713.3s)  ThreadPoolExecutor-0_1
+  [ 6/20] trial #0     COMPLETE   objective=$1653.50      best=$1653.50      (2729.4s)  ThreadPoolExecutor-0_0
+  [ 7/20] trial #9     COMPLETE   objective=$0.00         best=$1653.50      (2829.8s)  ThreadPoolExecutor-0_9
+  [ 8/20] trial #2     COMPLETE   objective=$0.00         best=$1653.50      (2840.9s)  ThreadPoolExecutor-0_2
+  [ 9/20] trial #5     COMPLETE   objective=$743.24       best=$1653.50      (2918.1s)  ThreadPoolExecutor-0_5
+  [10/20] trial #4     COMPLETE   objective=$3487.62      best=$3487.62      (2972.3s)  ThreadPoolExecutor-0_4
+  [11/20] trial #11    COMPLETE   objective=$286.44       best=$3487.62      (1866.6s)  ThreadPoolExecutor-0_7
+  [12/20] trial #10    COMPLETE   objective=$881.42       best=$3487.62      (1913.0s)  ThreadPoolExecutor-0_6
+  [13/20] trial #13    COMPLETE   objective=$0.00         best=$3487.62      (1960.4s)  ThreadPoolExecutor-0_8
+  [14/20] trial #12    COMPLETE   objective=$-172.81      best=$3487.62      (2016.1s)  ThreadPoolExecutor-0_3
+  [15/20] trial #14    COMPLETE   objective=$0.00         best=$3487.62      (1941.2s)  ThreadPoolExecutor-0_1
+  [16/20] trial #15    COMPLETE   objective=$-29.35       best=$3487.62      (1928.8s)  ThreadPoolExecutor-0_0
+  [17/20] trial #16    COMPLETE   objective=$54.22        best=$3487.62      (1862.2s)  ThreadPoolExecutor-0_9
+  [18/20] trial #17    COMPLETE   objective=$-9.16        best=$3487.62      (1851.8s)  ThreadPoolExecutor-0_2
+  [19/20] trial #18    COMPLETE   objective=$-1.26        best=$3487.62      (1785.0s)  ThreadPoolExecutor-0_5
+  [20/20] trial #19    COMPLETE   objective=$862.45       best=$3487.62      (1733.1s)  ThreadPoolExecutor-0_4
+
+[4/4] Optimisation complete.
+
+============================================================
+BEST PARAMETERS FOUND
+============================================================
+  Optimised total profit (test weeks 3–19): $3487.62
+
+  ── Copy these into evaluator.py ────────────────────────
+  MIN_INCLUSIVE_KALSHI_PROBABILITY_TO_BET = 89.5
+  # prob_ceiling (skip bets above)        = 92.8
+  MIN_GAME_ELAPSED_SECONDS_TO_BET         = 60
+  # max_elapsed_s (stop betting after)    = 3900
+  # momentum_window_s                     = 210
+  # min_momentum_pp                       = 17.53
+  # min_volume                            = 711.2
+  # kelly_fraction  (0 = flat sizing)     = 0.769
+  # kelly_cap_pct   (% of bankroll cap)   = 20.4
+  # flat_bet_pct    (% bankroll flat bet)  = 9.9
+
+  Full param dict for direct use in simulate_week():
+  {'prob_floor': 89.46598691286552, 'prob_ceiling': 92.77624427169094, 'min_elapsed_s': 60, 'max_elapsed_s': 3900, 'momentum_window_s': 210, 'min_momentum_pp': 17.526484798114545, 'min_volume': 711.2185000092771, 'kelly_fraction': 0.7687095946284362, 'kelly_cap_pct': 20.35590842574999, 'flat_bet_pct': 9.94875246087931}
+
+============================================================
+LEAVE-ONE-WEEK-OUT DETAIL  (best parameter set)
+============================================================
+Week  Games  Bets     W     L    Acc%  ROI/G all%  ROI/G bet%      Profit
+------------------------------------------------------------
+   3    177    43    41     2   95.3%      0.230%      0.946%  $   406.80
+   4    183    60    54     6   90.0%      0.004%      0.012%  $     7.47
+   5    145    40    39     1   97.5%      0.394%      1.427%  $   570.61
+   6    236    33    28     5   84.8%     -0.193%     -1.382%  $  -456.02
+   7    308    55    52     3   94.5%      0.157%      0.878%  $   482.64
+   8    113    16    15     1   93.8%      0.089%      0.628%  $   100.54
+   9    384    86    78     8   90.7%      0.005%      0.023%  $    19.40
+  10    347    75    68     7   90.7%     -0.008%     -0.035%  $   -26.46
+  11    325    48    42     6   87.5%     -0.094%     -0.639%  $  -306.80
+  12    346    65    60     5   92.3%      0.057%      0.305%  $   198.06
+  13    342    44    39     5   88.6%     -0.043%     -0.335%  $  -147.48
+  14    338    79    75     4   94.9%      0.207%      0.884%  $   698.67
+  15    335    64    61     3   95.3%      0.206%      1.076%  $   688.80
+  16    349    78    73     5   93.6%      0.118%      0.529%  $   412.88
+  17    339    71    66     5   93.0%      0.092%      0.441%  $   313.11
+  18    307    80    73     7   91.2%      0.000%      0.001%  $     0.48
+  19    161    69    65     4   94.2%      0.326%      0.761%  $   524.92
+------------------------------------------------------------
+ TOT   4735  1006   929    77   92.3%      0.074%      0.347%  $  3487.62
+
+── Summary ─────────────────────────────────────────────
+  Test weeks evaluated : 17
+  Total games observed : 4735
+  Total bets placed    : 1006
+  Overall win rate     : 92.3%
+  Avg ROI per game (all games) : 0.074%
+  Avg ROI per game (bets only) : 0.347%
+  Total profit         : $3487.62
+  Average weekly profit: $205.15
+  ROI on bankroll      : 20.52%
+
+── Bet-level summary (all test weeks, placed bets only where noted) ──
+  1696 of 4735  games had a betting opportunity (qualifying signal before bankroll / timing skips).
+  92.3%  of placed bets: team we bet on won the game.
+  1.02x  average cash return multiple per bet (payout ÷ total cost, counting losses as 0 payout → 0x in that bet’s term).
+
+── Top 5 trials ────────────────────────────────────────
+  Trial    4 | profit $  3487.62 | floor=89.5  ceil=92.8  min_el=60  kelly=0.77
+  Trial    0 | profit $  1653.50 | floor=80.6  ceil=93.0  min_el=2220  kelly=0.65
+  Trial    3 | profit $   961.02 | floor=66.7  ceil=87.7  min_el=900  kelly=0.60
+  Trial   10 | profit $   881.42 | floor=87.0  ceil=97.5  min_el=1620  kelly=0.69
+  Trial   19 | profit $   862.45 | floor=91.6  ceil=98.3  min_el=540  kelly=1.00
+
+── Total wall time: 78m 56.7s (4736.70s)

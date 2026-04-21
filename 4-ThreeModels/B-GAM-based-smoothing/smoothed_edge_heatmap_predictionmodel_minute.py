@@ -28,6 +28,7 @@ from pygam import LinearGAM, s, te
 
 
 REGULATION_SECONDS = 40 * 60
+HALFTIME_SECONDS = REGULATION_SECONDS // 2  # end of first 20-min half (NCAAB regulation)
 OT_SECONDS = 5 * 60
 MAX_OT_PERIODS = 3
 TOTAL_SECONDS_TO_PLOT = REGULATION_SECONDS + (MAX_OT_PERIODS * OT_SECONDS)
@@ -38,10 +39,11 @@ N_SPLINES_TIME = 20
 N_SPLINES_PROB = 20
 
 
-def _orange_white_blue_cmap():
+def _red_black_green_cmap():
+    """Diverging map: negative signed edge → red, zero → black, positive → green."""
     return LinearSegmentedColormap.from_list(
-        "orange_white_blue",
-        ["#e66100", "#fde0c5", "#f7f7f7", "#c9e4f5", "#2171b5"],
+        "red_black_green",
+        ["#b2182b", "#f4a582", "#000000", "#a6dba0", "#1b7837"],
     )
 
 
@@ -203,15 +205,6 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
     edge_smoothed = pd.DataFrame(z, index=probs, columns=time_labels)
 
     mask = count_matrix < min_obs_per_cell
-    annot_matrix = edge_smoothed.copy().astype(object)
-    for prob in edge_smoothed.index:
-        for tb in time_labels:
-            n = int(count_matrix.loc[prob, tb])
-            val = edge_smoothed.loc[prob, tb]
-            if pd.isna(val) or n < min_obs_per_cell:
-                annot_matrix.loc[prob, tb] = ""
-            else:
-                annot_matrix.loc[prob, tb] = f"{float(val):+.2f}% ({n})"
 
     vals = edge_smoothed.to_numpy()
     m = mask.to_numpy()
@@ -225,25 +218,23 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
     if vlim < 1e-6:
         vlim = 1.0
 
-    cmap = _orange_white_blue_cmap()
+    cmap = _red_black_green_cmap()
     norm = TwoSlopeNorm(vmin=-vlim, vcenter=0.0, vmax=vlim)
 
     fig_width = max(24, 18 * (num_time_bins / 20))
     fig, ax = plt.subplots(figsize=(fig_width, 28))
+    fig.patch.set_facecolor("black")
 
     data_plot = edge_smoothed.iloc[::-1]
     mask_plot = mask.iloc[::-1]
-    annot_plot = annot_matrix.iloc[::-1]
 
     sns.heatmap(
         data_plot,
         mask=mask_plot,
-        annot=annot_plot,
-        fmt="",
+        annot=False,
         cmap=cmap,
         norm=norm,
-        linewidths=0.3,
-        linecolor="white",
+        linewidths=0,
         cbar_kws={
             "label": "Signed edge (Empirical - Kalshi), percentage points",
             "shrink": 0.6,
@@ -251,19 +242,20 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
         },
         ax=ax,
         xticklabels=True,
-        annot_kws={"fontsize": 5.5, "fontweight": "bold", "color": "black"},
     )
 
-    ax.set_facecolor("#d9d9d9")
-    # Draw thick dividers after regulation, OT1, and OT2.
+    # Masked / low-n cells: same black as figure (no data).
+    ax.set_facecolor("black")
+    # Only structural verticals (no per-cell grid): halftime, end regulation, end OT1, end OT2.
     divider_seconds = [
+        HALFTIME_SECONDS,
         REGULATION_SECONDS,
         REGULATION_SECONDS + OT_SECONDS,
         REGULATION_SECONDS + (2 * OT_SECONDS),
     ]
     for boundary_seconds in divider_seconds:
         divider_x = (boundary_seconds / float(TOTAL_SECONDS_TO_PLOT)) * num_time_bins
-        ax.axvline(x=divider_x, color="black", linewidth=3.5)
+        ax.axvline(x=divider_x, color="white", linewidth=3.5)
 
     flipped_index = list(data_plot.index)
     ytick_positions = []
@@ -273,32 +265,47 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
             ytick_positions.append(i + 0.5)
             ytick_labels.append(f"{prob}%")
     ax.set_yticks(ytick_positions)
-    ax.set_yticklabels(ytick_labels, fontsize=10)
+    ax.set_yticklabels(ytick_labels, fontsize=10, color="white")
 
     x_tick_positions = ax.get_xticks()
     x_tick_labels = [label.get_text() for label in ax.get_xticklabels()]
     label_step = max(1, int(round(num_time_bins / 10)))
     ax.set_xticks(x_tick_positions[::label_step])
-    ax.set_xticklabels(x_tick_labels[::label_step], fontsize=11, rotation=0)
+    ax.set_xticklabels(x_tick_labels[::label_step], fontsize=11, rotation=0, color="white")
 
     n_games = df["kalshi_event"].nunique()
     n_obs = len(df)
-    ax.set_xlabel("Game Time (minutes elapsed)", fontsize=14, labelpad=12)
-    ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12)
+    ax.set_xlabel("Game Time (minutes elapsed)", fontsize=14, labelpad=12, color="white")
+    ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12, color="white")
     ax.set_title(
         "Smoothed Signed Edge (All 3-PredictionModel/Data files, minute-grouped through OT3)\n"
-        f"(orange = Kalshi high vs outcomes, blue = Kalshi low - {n_games} games - "
+        f"(red = Kalshi high vs outcomes, green = Kalshi low - {n_games} games - "
         f"{n_obs:,} minute-grouped observations - mask cells with n<{min_obs_per_cell})",
         fontsize=15,
         pad=16,
+        color="white",
     )
 
-    ax.tick_params(axis="x", labelsize=11, rotation=0)
-    ax.tick_params(axis="y", labelsize=10)
+    ax.tick_params(axis="x", labelsize=11, rotation=0, colors="white")
+    ax.tick_params(axis="y", labelsize=10, colors="white")
+
+    for spine in ax.spines.values():
+        spine.set_color("#666666")
 
     plt.tight_layout()
+
+    # Colorbar is on its own axes; match dark theme.
+    for ax_i in fig.axes:
+        ax_i.tick_params(colors="white")
+        if ax_i is not ax:
+            ax_i.set_facecolor("black")
+            for spine in ax_i.spines.values():
+                spine.set_color("#666666")
+        if ax_i.get_ylabel():
+            ax_i.yaxis.label.set_color("white")
+
     out_path = os.path.join(out_dir, output_filename)
-    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor="black", edgecolor="none")
     plt.close()
     print(f"Saved {output_filename} -> {out_path}")
     return edge_smoothed

@@ -38,10 +38,11 @@ N_SPLINES_TIME = 20
 N_SPLINES_PROB = 20
 
 
-def _orange_white_blue_cmap():
+def _red_white_green_cmap():
+    """Diverging map: negative signed edge → red, zero → neutral, positive → green."""
     return LinearSegmentedColormap.from_list(
-        "orange_white_blue",
-        ["#e66100", "#fde0c5", "#f7f7f7", "#c9e4f5", "#2171b5"],
+        "red_white_green",
+        ["#b2182b", "#f4a582", "#f7f7f7", "#a6dba0", "#1b7837"],
     )
 
 
@@ -218,7 +219,7 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
     if vlim < 1e-6:
         vlim = 1.0
 
-    cmap = _orange_white_blue_cmap()
+    cmap = _red_white_green_cmap()
     norm = TwoSlopeNorm(vmin=-vlim, vcenter=0.0, vmax=vlim)
 
     fig_width = max(24, 18 * (num_time_bins / 20))
@@ -280,7 +281,7 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
     ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12)
     ax.set_title(
         "Smoothed Signed Edge (All 3-PredictionModel/Data files, minute-grouped through OT3)\n"
-        f"(orange = Kalshi high vs outcomes, blue = Kalshi low - {n_games} games - "
+        f"(red = Kalshi high vs outcomes, green = Kalshi low - {n_games} games - "
         f"{n_obs:,} minute-grouped observations - mask cells with n<{min_obs_per_cell})",
         fontsize=15,
         pad=16,

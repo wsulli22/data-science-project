@@ -31,6 +31,8 @@ USAGE
 -----
   pip install optuna pandas numpy
   python ben-modified-by-will.py
+  python ben-modified-by-will.py --fast          # quick run (~40 trials, 4 workers)
+  python ben-modified-by-will.py --trials 80 --workers 4
 
   The script expects week_1_games.csv … week_19_games.csv to live in a
   subdirectory called "Data/" relative to this file (same layout as evaluator.py).
@@ -57,7 +59,9 @@ CHANGES FROM ben_model.py
 
 from __future__ import annotations
 
+import argparse
 import math
+import threading
 import time
 import warnings
 from datetime import timedelta
@@ -68,6 +72,7 @@ from typing import Optional
 
 import numpy as np
 import optuna
+import optuna.trial
 import pandas as pd
 
 warnings.filterwarnings("ignore")
@@ -539,6 +544,8 @@ def simulate_week(
     pending: list[tuple] = []
     total_bets = wins = losses = skipped = 0
     total_profit = 0.0
+    team_won_bets = 0
+    sum_return_multiple = 0.0  # sum of payout/total_cost per placed bet (0 on losses)
 
     for bet in candidates:
         while pending and pending[0][0] <= bet["bet_ts"]:
@@ -565,18 +572,26 @@ def simulate_week(
         else:
             losses += 1
 
+        if bet["bet_team"] == bet["winner"]:
+            team_won_bets += 1
+        if total_cost > 0:
+            sum_return_multiple += payout / total_cost
+
     while pending:
         _, payout, _ = heappop(pending)
         bankroll += payout
 
     return {
-        "games":       len(week_games),
-        "profit":      bankroll - STARTING_BANKROLL,
-        "bets":        total_bets,
-        "wins":        wins,
-        "losses":      losses,
-        "skipped":     skipped,
-        "final_bank":  bankroll,
+        "games":                 len(week_games),
+        "games_with_opportunity": len(candidates),
+        "profit":                bankroll - STARTING_BANKROLL,
+        "bets":                  total_bets,
+        "wins":                  wins,
+        "losses":                losses,
+        "skipped":               skipped,
+        "final_bank":            bankroll,
+        "team_won_bets":         team_won_bets,
+        "sum_return_multiple":   sum_return_multiple,
     }
 
 
@@ -666,6 +681,9 @@ def run_best_params(
     first_test_week = MIN_TRAIN_WEEKS + 1
     total_profit = 0.0
     total_games = total_bets = total_wins = total_losses = 0
+    total_opportunities = 0
+    total_team_won_bets = 0
+    total_sum_return_multiple = 0.0
 
     print("\n" + "=" * 60)
     print("LEAVE-ONE-WEEK-OUT DETAIL  (best parameter set)")
@@ -698,6 +716,9 @@ def run_best_params(
         total_bets   += r["bets"]
         total_wins   += r["wins"]
         total_losses += r["losses"]
+        total_opportunities += r["games_with_opportunity"]
+        total_team_won_bets += r["team_won_bets"]
+        total_sum_return_multiple += r["sum_return_multiple"]
 
         print(
             f"{test_week_num:>4}  {r['games']:>5}  {r['bets']:>4}  {r['wins']:>4}  {r['losses']:>4}  "
@@ -740,14 +761,74 @@ def run_best_params(
     print(f"  Average weekly profit: ${avg_profit:.2f}")
     print(f"  ROI on bankroll      : {roi:.2f}%")
 
+    print("\n── Bet-level summary (all test weeks, placed bets only where noted) ──")
+    print(
+        f"  {total_opportunities} of {total_games}  games had a betting opportunity "
+        f"(qualifying signal before bankroll / timing skips)."
+    )
+    if total_bets > 0:
+        pick_win_pct = 100.0 * total_team_won_bets / total_bets
+        avg_mult = total_sum_return_multiple / total_bets
+        print(
+            f"  {pick_win_pct:.1f}%  of placed bets: team we bet on won the game."
+        )
+        print(
+            f"  {avg_mult:.2f}x  average cash return multiple per bet "
+            f"(payout ÷ total cost, counting losses as 0 payout → 0x in that bet’s term)."
+        )
+    else:
+        print("  (No placed bets — win rate and return multiple N/A.)")
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Bayesian hyper-parameter search for the Kalshi NCAAB strategy."
+    )
+    p.add_argument(
+        "--fast",
+        action="store_true",
+        help="Short Optuna run (40 trials, 4 workers) for quick iteration.",
+    )
+    p.add_argument(
+        "--trials",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"Optuna trials (default: {N_OPTUNA_TRIALS}, or 40 with --fast if not set).",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"Parallel Optuna workers (default: {N_OPTUNA_WORKERS}, or 4 with --fast if not set).",
+    )
+    return p.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    n_trials = args.trials
+    n_workers = args.workers
+    if args.fast:
+        n_trials = n_trials if n_trials is not None else 40
+        n_workers = n_workers if n_workers is not None else 4
+    else:
+        n_trials = n_trials if n_trials is not None else N_OPTUNA_TRIALS
+        n_workers = n_workers if n_workers is not None else N_OPTUNA_WORKERS
+    if n_trials < 1:
+        raise SystemExit("--trials must be >= 1")
+    if n_workers < 1:
+        raise SystemExit("--workers must be >= 1")
+
     _script_start = time.perf_counter()
     print("=" * 60)
     print("Ben's Kalshi NCAAB Betting Strategy Optimiser (with modifications by Will)")
     print("=" * 60)
+    if args.fast or args.trials is not None or args.workers is not None:
+        print(f"  Optuna: {n_trials} trials, {n_workers} workers")
 
     # 1. Load data
     print("\n[1/4] Loading weekly data files …")
@@ -759,25 +840,44 @@ def main() -> None:
     print("  Done.")
 
     # 3. Run Bayesian optimisation
-    print(f"\n[3/4] Running Optuna optimisation ({N_OPTUNA_TRIALS} trials, {N_OPTUNA_WORKERS} workers) …")
-    print("  (This may take several minutes — progress shown every 50 trials)\n")
+    print(f"\n[3/4] Running Optuna optimisation ({n_trials} trials, {n_workers} workers) …")
+    print("  (One line per trial as each worker finishes; completion order can be out of order.)\n")
 
     sampler = optuna.samplers.TPESampler(seed=OPTUNA_SEED)
     study = optuna.create_study(direction="maximize", sampler=sampler)
 
     objective = make_objective(all_weeks, contributions)
 
-    def _callback(study: optuna.Study, trial: optuna.Trial) -> None:
-        if (trial.number + 1) % 50 == 0:
-            print(
-                f"  Trial {trial.number + 1:>4}/{N_OPTUNA_TRIALS} | "
-                f"best profit so far: ${study.best_value:.2f}"
-            )
+    def _callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        finished = sum(1 for t in study.trials if t.state.is_finished())
+        thr = threading.current_thread().name
+        if trial.duration is not None:
+            dur_txt = f"{trial.duration.total_seconds():.1f}s"
+        else:
+            dur_txt = "?"
+
+        if trial.value is not None:
+            obj_txt = f"${trial.value:.2f}"
+        else:
+            obj_txt = trial.state.name
+
+        try:
+            best_txt = f"${study.best_value:.2f}"
+        except ValueError:
+            best_txt = "n/a"
+
+        print(
+            f"  [{finished:>{len(str(n_trials))}}/{n_trials}] "
+            f"trial #{trial.number:<4}  {trial.state.name:<9}  "
+            f"objective={obj_txt:<12}  best={best_txt:<12}  "
+            f"({dur_txt})  {thr}",
+            flush=True,
+        )
 
     study.optimize(
         objective,
-        n_trials=N_OPTUNA_TRIALS,
-        n_jobs=N_OPTUNA_WORKERS,
+        n_trials=n_trials,
+        n_jobs=n_workers,
         callbacks=[_callback],
     )
 

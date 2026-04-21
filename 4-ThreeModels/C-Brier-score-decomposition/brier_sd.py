@@ -288,26 +288,70 @@ def _print_bin_details(result: dict, indent: int = 2) -> None:
 
 # ── Plotting logic ────────────────────────────────────────────────────────────
 
+def _style_legend_dark(leg) -> None:
+    if leg is None:
+        return
+    frame = leg.get_frame()
+    frame.set_facecolor("#1a1a1a")
+    frame.set_edgecolor("#555555")
+    for text in leg.get_texts():
+        text.set_color("#e8e8e8")
+
+
+def _apply_dark_axes(fig, axes) -> None:
+    """Black figure/axes, light text and grid (for slide dark mode)."""
+    fig.patch.set_facecolor("black")
+    for ax in axes.flat:
+        ax.set_facecolor("black")
+        ax.tick_params(colors="#cccccc", which="both")
+        ax.xaxis.label.set_color("#e8e8e8")
+        ax.yaxis.label.set_color("#e8e8e8")
+        ax.title.set_color("#f0f0f0")
+        for spine in ax.spines.values():
+            spine.set_color("#555555")
+        ax.grid(True, alpha=0.25, color="#ffffff")
+    fig.suptitle(
+        "Kalshi NCAAB Brier Score Decomposition",
+        fontsize=16,
+        fontweight="bold",
+        color="#f5f5f5",
+    )
+
+
 def plot_brier_results(overall: dict, fine_rows: list, out_path: str = "brier_visualization.png") -> None:
     """Generates a 4-panel dashboard of the Brier Score decomposition."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("Kalshi NCAAB Brier Score Decomposition", fontsize=16, fontweight="bold")
+    _apply_dark_axes(fig, axes)
 
     # 1. Calibration Curve
     ax1 = axes[0, 0]
     bd = overall.get("bin_details")
     if bd is not None and not bd.empty:
-        # Plot perfect calibration line
-        ax1.plot([50, 100], [50, 100], 'k--', label="Perfect Calibration", alpha=0.6)
+        # Plot perfect calibration line (light on black)
+        ax1.plot(
+            [50, 100],
+            [50, 100],
+            linestyle="--",
+            color="#bbbbbb",
+            label="Perfect Calibration",
+            alpha=0.85,
+        )
         # Plot empirical vs predicted
-        ax1.plot(bd["mean_forecast"], bd["empirical_wr"], marker='o', linestyle='-', color='tab:blue', label="Market Calibration")
+        ax1.plot(
+            bd["mean_forecast"],
+            bd["empirical_wr"],
+            marker="o",
+            linestyle="-",
+            color="cornflowerblue",
+            label="Market Calibration",
+        )
         ax1.set_xlim(45, 105)
         ax1.set_ylim(45, 105)
         ax1.set_xlabel("Market Implied Probability (%)")
         ax1.set_ylabel("Empirical Win Rate (%)")
         ax1.set_title("Reliability Curve (Calibration)")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
+        leg1 = ax1.legend()
+        _style_legend_dark(leg1)
 
     if fine_rows:
         fdf = pd.DataFrame(fine_rows)
@@ -316,35 +360,33 @@ def plot_brier_results(overall: dict, fine_rows: list, out_path: str = "brier_vi
 
         # 2. Decomposition over time
         ax2 = axes[0, 1]
-        ax2.plot(fdf_plot["min_start"], fdf_plot["brier"], label="Brier Score", color='purple', linewidth=2)
-        ax2.plot(fdf_plot["min_start"], fdf_plot["unc"], label="Uncertainty", color='gray', linestyle=':')
-        ax2.plot(fdf_plot["min_start"], fdf_plot["res"], label="Resolution", color='green')
-        ax2.plot(fdf_plot["min_start"], fdf_plot["rel"], label="Reliability", color='red')
+        ax2.plot(fdf_plot["min_start"], fdf_plot["brier"], label="Brier Score", color="#c678ff", linewidth=2)
+        ax2.plot(fdf_plot["min_start"], fdf_plot["unc"], label="Uncertainty", color="#9a9a9a", linestyle=":")
+        ax2.plot(fdf_plot["min_start"], fdf_plot["res"], label="Resolution", color="#5fd95f")
+        ax2.plot(fdf_plot["min_start"], fdf_plot["rel"], label="Reliability", color="#ff6b6b")
         ax2.set_xlabel("Game Minute")
         ax2.set_ylabel("Score Component")
         ax2.set_title("Decomposition Over Time")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
+        leg2 = ax2.legend()
+        _style_legend_dark(leg2)
 
         # 3. Skill Score over time
         ax3 = axes[1, 0]
-        ax3.plot(fdf_plot["min_start"], fdf_plot["skill"], color='teal', linewidth=2)
-        ax3.axhline(0, color='k', linestyle='--', alpha=0.6)
+        ax3.plot(fdf_plot["min_start"], fdf_plot["skill"], color="#40e0d0", linewidth=2)
+        ax3.axhline(0, color="#888888", linestyle="--", alpha=0.8)
         ax3.set_xlabel("Game Minute")
         ax3.set_ylabel("Skill Score")
         ax3.set_title("Market Skill vs Climatology Over Time")
-        ax3.grid(True, alpha=0.3)
 
         # 4. Base Rate over time
         ax4 = axes[1, 1]
-        ax4.plot(fdf_plot["min_start"], fdf_plot["base_rate"] * 100, color='darkorange', linewidth=2)
+        ax4.plot(fdf_plot["min_start"], fdf_plot["base_rate"] * 100, color="#ffaa55", linewidth=2)
         ax4.set_xlabel("Game Minute")
         ax4.set_ylabel("Empirical Win Rate (%)")
         ax4.set_title("Favoured Team Win Rate Over Time")
-        ax4.grid(True, alpha=0.3)
 
     plt.tight_layout(rect=[0, 0.02, 1, 0.96])
-    plt.savefig(out_path, dpi=300)
+    plt.savefig(out_path, dpi=300, facecolor="black", edgecolor="none")
     plt.close()
 
 
