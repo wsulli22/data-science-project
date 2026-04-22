@@ -87,6 +87,7 @@ NUM_WEEKS = 19
 STARTING_BANKROLL = 1000.0            # dollars, resets each week
 SETTLEMENT_BUFFER_SECONDS = 2 * 60 * 60
 TAKER_FEE_RATE = 0.07
+CASH_OUT_PENALTY_PER_CONTRACT = 0.10
 
 # Optimisation
 N_OPTUNA_TRIALS = 500                  # increase for more thorough search
@@ -145,6 +146,48 @@ def _buy(target_dollars: float, contract_price: float) -> tuple[float, float, in
     stake = _usd2(contracts * price)
     fee = _taker_fee(price, contracts)
     return stake, fee, contracts
+
+
+def sell_contracts_at_price(
+    contract_count: int,
+    sell_price: float,
+) -> tuple[float, float, float, float]:
+    """
+    Sell path (by contract count), not used by this optimiser (buy-and-hold to settlement).
+
+    Gross proceeds = contracts * sell price; fee uses the same Kalshi taker formula as
+    ``_taker_fee``; then a fixed cash-out penalty per contract.
+    """
+    gross_proceeds = _usd2(contract_count * sell_price)
+    fee_size_dollars = _taker_fee(sell_price, contract_count)
+    cash_out_penalty = _usd2(contract_count * CASH_OUT_PENALTY_PER_CONTRACT)
+    net_proceeds = _usd2(gross_proceeds - fee_size_dollars - cash_out_penalty)
+    return gross_proceeds, fee_size_dollars, cash_out_penalty, net_proceeds
+
+
+def sell(
+    game_id: str,
+    team_name: str,
+    contract_count: int,
+    current_kalshi_prob_for_team_selling: float,
+) -> tuple[float, float, float]:
+    """
+    Net dollars returned (cashed out) when selling whole contracts at the current quote.
+
+    ``game_id`` and ``team_name`` are placeholders for parity with a live trading API.
+
+    ``current_kalshi_prob_for_team_selling`` is the Yes price for this team's contract
+    at sell time (same units as ``_buy`` — e.g. 0.64 for 64%). Fees and per-contract
+    cash-out penalty follow ``sell_contracts_at_price``.
+    """
+    del game_id, team_name
+    n = int(max(0, contract_count))
+    price = min(1.0, max(float(current_kalshi_prob_for_team_selling), 0.01))
+    if n <= 0:
+        return _usd2(0.0), _usd2(0.0), _usd2(0.0)
+    gross_proceeds, fee_sz, cash_penalty, net_proceeds = sell_contracts_at_price(n, price)
+    del gross_proceeds
+    return _usd2(net_proceeds), _usd2(fee_sz), _usd2(cash_penalty)
 
 
 # ── Data loading and preprocessing ────────────────────────────────────────────
