@@ -24,20 +24,7 @@ Our dataset is comprised of 19 custom-created CSV files, each representing one w
 
 ## Research Process
 
-Steps below follow the repository layout. Each bullet uses a **[*stage tag*]** (data gathering, transformation, analysis, visualization, modeling, evaluation, betting strategy) followed by the file(s) involved. For a script and its main outputs, extensions are chained directly on the script name with no spaces, e.g. `get_list_of_kalshi_games.py/txt`, `accuracy_across_time.py/png`, `logistic_regression_empirical.py/json/csv/png` (folders are given in the section headings).
-
-#### Project root
-
-- **[*Documentation*]** `README.md` — project overview, research question, definitions, dataset acquisition, research-process map, and API references.  
-- **[*Documentation*]** `Ben, Connor, Mwayi, Will.txt` — draft narrative / write-up for the April 2026 accuracy analysis (authors and research framing).  
-- **[*Preprocessing & Transformation*]** `.gitignore` — excludes large generated data, caches, and local artifacts from version control.
-
-#### `0-Data/`
-
-- **[*Documentation*]** `data.txt` — short reminder to place downloaded `week_*_games.csv` files in this folder when reproducing the pipeline outside this machine.  
-- **[*Dataset*]** `week_1_games.csv` … `week_19_games.csv` — cleaned, per-calendar-second merged Kalshi + ESPN tables (one file per calendar week of games), produced by `build_weekly_data_files.py/csv` under `1-GatheringPreprocessingTransformation/`, consumed by analysis, models, and the betting script.
-
-#### `1-GatheringPreprocessingTransformation/` (including `GeneratedDataFiles/`)
+#### `1-GatheringPreprocessingTransformation/`
 
 - **[*Data Gathering*]** `get_list_of_kalshi_games.py/txt` — list Kalshi-listed college basketball games up to a cutoff date.  
 - **[*Data Gathering*]** `get_list_of_espn_games.py/txt` — list ESPN college basketball games over the same window.  
@@ -49,15 +36,14 @@ Steps below follow the repository layout. Each bullet uses a **[*stage tag*]** (
 - **[*Preprocessing & Transformation*]** `build_weekly_data_files.py/csv` — read the merged clean file, interpolate to one row per real-world second per game, pivot both teams onto one row, split by calendar week; weekly files land in `0-Data/` as `week_<n>_games.csv`.  
 - **[*Preprocessing & Transformation*]** `runall.py` — end-to-end driver: refresh Kalshi/ESPN lists, rebuild mappings, fetch and merge all sessions, then rebuild weekly CSVs (and any hooked-in downstream plots if those modules are present on the path).
 
-#### `2-PreliminaryAnalysis/` (figures under `GeneratedDataAndVisualizations/`)
+#### `2-PreliminaryAnalysis/`
 
 - **[*Analysis*]** `data_documentation.py/txt` — stream all `0-Data/week_*_games.csv` files and print summary statistics (row counts, unique games, weekday mix, date span, regulation vs overtime mix, typical durations); optional `.txt` report alongside the script.  
 - **[*Visualization*]** `accuracy_across_time.py/png` — weekly bar chart of mean per-game calibration score; figure under `GeneratedDataAndVisualizations/`.
 
-#### `3-ThreeModels/A-Logistic-regression/` (outputs under `GeneratedDataFiles/logistic_regression/`)
+#### `3-ThreeModels/A-Logistic-regression/`
 
-- **[*Modeling & Evaluation*]** `logistic_regression_empirical.py/json/csv/png` — scikit-learn logistic regression on extended features from weekly CSVs (GroupKFold CV, holdout split, calibration checks); writes metrics, predictions, coefficients, and `holdout_calibration.png` under `GeneratedDataFiles/logistic_regression/`.  
-- **[*Documentation*]** `.gitkeep` — keeps the model folder in git when outputs are absent.
+- **[*Modeling & Evaluation*]** `logistic_regression_empirical.py/json/csv/png` — scikit-learn logistic regression on extended features from weekly CSVs (GroupKFold CV, holdout split, calibration checks); writes metrics, predictions, coefficients, and `holdout_calibration.png` under `GeneratedDataFiles/logistic_regression/`.
 
 #### `3-ThreeModels/B-GAM-based-smoothing/`
 
@@ -66,20 +52,12 @@ Steps below follow the repository layout. Each bullet uses a **[*stage tag*]** (
 
 #### `3-ThreeModels/C-Brier-score-decomposition/`
 
-- **[*Evaluation*]** `brier_sd.py/png` — Murphy (1973) Brier score decomposition (reliability, resolution, uncertainty, skill) for Kalshi quotes with minute sampling; diagnostic figure alongside the script.  
-- **[*Documentation*]** `.gitkeep` — keeps folder under version control when outputs are cleaned.
-
-#### `3-ThreeModels/` (folder marker)
-
-- **[*Documentation*]** `.gitkeep` — placeholder for the parent “three models” directory.
+- **[*Evaluation*]** `brier_sd.py/png` — Murphy (1973) Brier score decomposition (reliability, resolution, uncertainty, skill) for Kalshi quotes with minute sampling; diagnostic figure alongside the script.
 
 #### `4-BettingAlgorithm/`
 
-- **[*Betting Strategy*]** `algorithm_with_testing.py/txt` — walk-forward betting / sizing experiments (e.g. Optuna-driven parameter search) on weekly CSVs, with fee-aware sizing; save or redirect run output to `results.txt`.
-
-#### Generated or local-only files (not part of the hand-authored research trail)
-
-These may appear after running Python or opening folders on macOS; they are omitted from the folders above: `__pycache__/` directories, `3-ThreeModels/A-Logistic-regression/.cache/` (Matplotlib config redirect), workspace `.DS_Store`, and any user-level `.matplotlib/` font lists.
+- **[*Betting Strategy*]** `algorithm_with_testing.py/txt` — walk-forward betting / sizing experiments (e.g. Optuna-driven parameter search) on weekly CSVs, with fee-aware sizing; save or redirect run output to `results.txt`.  
+- **[*Betting Strategy*]** `baseline.py/txt` — benchmark that always bets the pre-game favorite (same weekly CSVs, buy-side taker fees, buy-and-hold settlement, and leave-one-week-out test weeks as the main script). Runs two variants: a fixed stake (% of starting bankroll) and a half-Kelly stake that uses the same empirical win-rate surface as the optimizer when it shows positive edge at entry, with a bankroll cap. Run from `4-BettingAlgorithm/`; redirect or tee output to `baseline_results.txt` to compare with `results.txt`.
 
 ## References
 
