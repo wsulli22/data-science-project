@@ -1,57 +1,92 @@
-## Kalshi College Basketball Probability Analysis
+# Kalshi College Basketball Probability Analysis
 
-### Team Members
+## Team Members
 
 - Will Sullivan
 - Ben Herbst
 - Connor MacDonald
 - Mwayi Kashoko
 
-### Generated data (not in this repository)
-
-These CSVs are too large for GitHub and are **gitignored**. Download them from [Google Drive](https://drive.google.com/drive/folders/1wXeMrY5iFb91e7M8YvE220CNQVJ-ECXh?usp=sharing) or regenerate: run `1-GatheringPreprocessingTransformation/main.py`, then `3-PredictionModel/create_data.py`.
-
-- **`all_games_merged_clean.csv`** → `1-GatheringPreprocessingTransformation/GeneratedDataFiles/` (default path for visualizations and the interactive app).
-- **`week_1_games.csv` … `week_19_games.csv`** → `3-PredictionModel/Data/` (evaluator and minute-grouped heatmaps).
-
-You only need the **week-by-week** files under `3-PredictionModel/Data/` to run `3-PredictionModel/evaluator.py`. Most visualization scripts also need **`all_games_merged_clean.csv`**.
-
-### Research Question
+## Research Question
 
 How accurate are Kalshi’s live-in game win probabilities for college basketball across different stages of the game, meaning does a quoted 80% probability early in the game correspond to the same observed win rate as a quoted 80% probability late in the game, or are there systematic regions of the (game time, probability) space where the Kalshi marketplace consistently overstates or understates a team’s true chance of winning?
 
-### Important Definitions
+## Dataset
+
+Our dataset is comprised of 19 custom-created CSV files, each representing one week of college basketball games. The dataset is too large for GitHub, so you must download it from [Google Drive](https://drive.google.com/drive/folders/1wXeMrY5iFb91e7M8YvE220CNQVJ-ECXh?usp=sharing). The dataset was created using the code in the `1-GatheringPreprocessingTransformation` folder.
+
+## Important Definitions
 
 - **Kalshi Win Probability**: the percentage that Kalshi quotes for a team to win a game. This number is also the same as the asking price when making a bet (e.g. a 60% probability means each contract costs $0.60 and pays $1.00 if the team wins. In other words, for every $100 bet, the payout will be $160 if the team you selected wins).
 - **Empirical Win Probability**: the percentage that the team actually won the game based on historical analysis of the Kalshi marketplaced date. (Kalshi live win probabilities are based on how many dollars/contracts are bet on the team winning or losing.
 
 *Note the words rate, probability, and percentage all mean the same thing and can and are used interchangeably throughout this project.*
 
-### Research Process
+## Research Process
 
-- **[*Data Gathering*]** Fetch all historical Kalshi-listed college basketball games (2025-11-03 through Current Date 2026-03-17)  
-- **[*Data Gathering*]** Fetch all ESPN college basketball games during that same time period  
-- **[*Transformation*]** Map the gameIDs for each Kalshi game to the corresponding ESPN gameID  
-- **[*Data Gathering & Transformation*]** For each mapped game, fetch ESPN play-by-play and Kalshi 1-minute candlestick data and merge into a unified per-game dataset. Since ESPN play-by-play has both the basketballgame lock and real world timestamps, the real world times of the play-by-play data are used to match the game clocks to the Kalshi trading historical data.  
-- **[*Preprocessing & Transformation*]** Clean and combine all play-by-play and candlestick data into a unified single dataset (filter bad games, handle missing data, standardize fields)  
-- **[*Transformation*]** For each game, expand the timeline to one row per calendar second between the earliest and latest observed timestamps; linearly interpolate `win_prob_pct`, `volume`, and `game_elapsed_seconds` where there is no observation (with `period` carried forward from the latest prior play); pivot the two teams into a single row per second; then write weekly CSVs (`week_1_games.csv`, …) for downstream prediction-model work.  
-- **[*Visualization*]** Build an interactive game viewer (`2-VisualizationsAndAnalysis/interactive_game_points_app.py`): a local Flask app with Plotly charts backed by `all_games_merged_clean.csv`. Search or browse games by `kalshi_event`, step prev/next, optionally filter by halftime heuristics, toggle the x-axis between real-world time and game clock, and inspect Kalshi win probability (and related series) with links to the Kalshi market and ESPN. Run with Python and open `http://127.0.0.1:8050`.  
-- **[*Visualization*]** Generate a heat map using the raw data showing the empirical win rate for each (game time, probability) combination (one cell each). `rawdata_heatmap.png`  
-- **[*Visualization*]** Generate a smoothed calibration heat map using a Generalized Additive Model (GAM) with LogisticGAM to smooth the calibration data using splines on game time and Kalshi probability showing the smoothed empirical win rate for each (game time, probability). Think of it like a linear regression for 3D data (the three dimensions are game time, Kalshi probability, and empirical win rate). `smoothed_heatmap.png`  
-- **[*Visualization*]** Generate a raw data signed edge heatmap showing empirical win rate minus Kalshi quoted probability in each raw cell to identify overpricing/underpricing regions. `rawdata_edge_heatmap.png`  
-- **[*Visualization*]** Generate a smoothed signed edge heatmap from `3-PredictionModel/Data/week_*_games.csv`: data are aggregated by calendar minute (with zero-volume rows kept); time bins cover regulation plus up to three overtime periods; a `LinearGAM` smooths signed edge (empirical win % minus Kalshi quote) over game time and probability. `smoothed_edge_heatmap_predictionmodel_minute.png`  
-- **[*Visualization*]** Same minute-grouped prediction-model pipeline as the signed-edge chart, but the GAM smooths empirical win rate (0–100%) with a red–green diverging scale. `smoothed_true_win_prob_heatmap_predictionmodel_minute.png`  
-- **[*Visualization*]** Plot mean absolute calibration error (absolute difference between empirical win rate and average quoted Kalshi probability, in percentage points) by 1-minute game-time buckets: coarse bars plus a finer per-minute line overlay. `accuracy_over_time.png`  
-- **[*Visualization*]** Bar chart of mean per-game calibration score (0–100) aggregated by **calendar week** (weeks starting Monday), ordered in time—not split by weekday. `accuracy_across_time_for_games_by_day.png`  
-- **[*Visualization*]** Game length visualization: scatter of each game’s real-world duration (min/max `realworld_timestamp` span) versus game order by start time, with mean/median lines, plus a histogram of durations. `game_durations.png`  
-- **[*Visualization*]** Generate an average-games-per-day-of-week bar chart for Monday through Sunday. `games_per_day_of_week.png`
+Steps below follow the repository layout. Each bullet uses a **[*stage tag*]** (data gathering, transformation, analysis, visualization, modeling, evaluation, betting strategy) followed by the file(s) involved. For a script and its main outputs, extensions are chained directly on the script name with no spaces, e.g. `get_list_of_kalshi_games.py/txt`, `accuracy_across_time.py/png`, `logistic_regression_empirical.py/json/csv/png` (folders are given in the section headings).
 
-### [NEEDS TO BE FINISHED] Prediction & Evaluation
+#### Project root
 
-The main thing that is left to do is to create what we think is an optimal (most profitable) betting strategy that leverages the data and analysis from our research and backtest it on the game data. This is done with an evaluator script (`evaluator.py`) that tests a strategy on the week-by-week data in a cross-validation manner. Right now it is a very basic strategy that only bets the first time a team’s quoted Kalshi win probability crosses up to XX% or higher while the game has been played for at least XXXX seconds (e.g. 1200 = halftime). Some important things to remember are: [1] each week’s data has start and end timestamps for each game in that week, so if it’s being tested the end timestamps should not be taken into account for strategy, only if you’re looking ahead into the future to see when games end bc that’s like having a crystal ball, [2] that there’s a two hour settlement buffer after the game ends, since Kalshi doesn’t release funds until about two hours after the game ends, [3] Kalshi fees are significant in practice, so larger bet sizes help make the fee drag minuscule as a fraction of each stake, [4] Kalshi has a somewhat sophisticated fee structure that I already set up in the evaluator so just use `buy()` and `sell()` functions to buy and sell contracts. `sell()` has a manually added penalty that takes into account how, from my experience, when you go to sell lots of other people are trying to sell too (let’s say bc a team makes a last-second comeback), you get a price that is substantially lower than the trade price you wanted to exit at (this is taken into account for you already with the functions built in), [5] feel free to adjust all the parameters, create your own parameters, come up with a better profitability test as a whole, [6] remember if we get this working our system is basically an ATM that prints money.
+- **[*Documentation*]** `README.md` — project overview, research question, definitions, dataset acquisition, research-process map, and API references.  
+- **[*Documentation*]** `Ben, Connor, Mwayi, Will.txt` — draft narrative / write-up for the April 2026 accuracy analysis (authors and research framing).  
+- **[*Preprocessing & Transformation*]** `.gitignore` — excludes large generated data, caches, and local artifacts from version control.
 
-### References
+#### `0-Data/`
+
+- **[*Documentation*]** `data.txt` — short reminder to place downloaded `week_*_games.csv` files in this folder when reproducing the pipeline outside this machine.  
+- **[*Dataset*]** `week_1_games.csv` … `week_19_games.csv` — cleaned, per-calendar-second merged Kalshi + ESPN tables (one file per calendar week of games), produced by `build_weekly_data_files.py/csv` under `1-GatheringPreprocessingTransformation/`, consumed by analysis, models, and the betting script.
+
+#### `1-GatheringPreprocessingTransformation/` (including `GeneratedDataFiles/`)
+
+- **[*Data Gathering*]** `get_list_of_kalshi_games.py/txt` — list Kalshi-listed college basketball games up to a cutoff date.  
+- **[*Data Gathering*]** `get_list_of_espn_games.py/txt` — list ESPN college basketball games over the same window.  
+- **[*Transformation*]** `kalshi_espn_game_id_mapper.py/csv` — map each Kalshi game id to the matching ESPN id (reads the two lists and optional `mapping_id_corrections.csv`).  
+- **[*Transformation*]** `mapping_id_corrections.csv` — hand-maintained overrides / fixes for stubborn id matches used by the mapper.  
+- **[*Data Gathering*]** `get_kalshi_game_data.py` — fetch Kalshi market candlestick (and related) details for a game.  
+- **[*Data Gathering*]** `get_espn_game_timestamp_mapings.py` — fetch ESPN play-by-play and timestamp metadata used to align game clock to wall clock.  
+- **[*Data Gathering & Transformation*]** `fetch_and_merge_full_game_session_data.py/csv` — for each mapped pair, pull ESPN play-by-play and Kalshi candles, align timestamps, merge, and clean into the unified merged-game table (`all_games_merged_clean.csv` in `GeneratedDataFiles/` when the full run completes).  
+- **[*Preprocessing & Transformation*]** `build_weekly_data_files.py/csv` — read the merged clean file, interpolate to one row per real-world second per game, pivot both teams onto one row, split by calendar week; weekly files land in `0-Data/` as `week_<n>_games.csv`.  
+- **[*Preprocessing & Transformation*]** `runall.py` — end-to-end driver: refresh Kalshi/ESPN lists, rebuild mappings, fetch and merge all sessions, then rebuild weekly CSVs (and any hooked-in downstream plots if those modules are present on the path).
+
+#### `2-PreliminaryAnalysis/` (figures under `GeneratedDataAndVisualizations/`)
+
+- **[*Analysis*]** `data_documentation.py/txt` — stream all `0-Data/week_*_games.csv` files and print summary statistics (row counts, unique games, weekday mix, date span, regulation vs overtime mix, typical durations); optional `.txt` report alongside the script.  
+- **[*Visualization*]** `accuracy_across_time.py/png` — weekly bar chart of mean per-game calibration score; figure under `GeneratedDataAndVisualizations/`.
+
+#### `3-ThreeModels/A-Logistic-regression/` (outputs under `GeneratedDataFiles/logistic_regression/`)
+
+- **[*Modeling & Evaluation*]** `logistic_regression_empirical.py/json/csv/png` — scikit-learn logistic regression on extended features from weekly CSVs (GroupKFold CV, holdout split, calibration checks); writes metrics, predictions, coefficients, and `holdout_calibration.png` under `GeneratedDataFiles/logistic_regression/`.  
+- **[*Documentation*]** `.gitkeep` — keeps the model folder in git when outputs are absent.
+
+#### `3-ThreeModels/B-GAM-based-smoothing/`
+
+- **[*Visualization*]** `gam_edge_heatmap.py/png` — minute-binned weekly CSV data; `LinearGAM` smooth of signed edge (empirical win % minus quote) over game time and probability.  
+- **[*Visualization*]** `gam_true_win_heatmap.py/png` — same binning pipeline; GAM-smoothed empirical win rate surface (red–green diverging scale).
+
+#### `3-ThreeModels/C-Brier-score-decomposition/`
+
+- **[*Evaluation*]** `brier_sd.py/png` — Murphy (1973) Brier score decomposition (reliability, resolution, uncertainty, skill) for Kalshi quotes with minute sampling; diagnostic figure alongside the script.  
+- **[*Documentation*]** `.gitkeep` — keeps folder under version control when outputs are cleaned.
+
+#### `3-ThreeModels/` (folder marker)
+
+- **[*Documentation*]** `.gitkeep` — placeholder for the parent “three models” directory.
+
+#### `4-BettingAlgorithm/`
+
+- **[*Betting Strategy*]** `algorithm_with_testing.py/txt` — walk-forward betting / sizing experiments (e.g. Optuna-driven parameter search) on weekly CSVs, with fee-aware sizing; save or redirect run output to `results.txt`.
+
+#### Generated or local-only files (not part of the hand-authored research trail)
+
+These may appear after running Python or opening folders on macOS; they are omitted from the folders above: `__pycache__/` directories, `3-ThreeModels/A-Logistic-regression/.cache/` (Matplotlib config redirect), workspace `.DS_Store`, and any user-level `.matplotlib/` font lists.
+
+## References
 
 Kalshi Candlestick API Documentation ([link](https://docs.kalshi.com/api-reference/market/get-market-candlesticks))
 
 ESPN Hidden API Endpoints ([link](https://gist.github.com/akeaswaran/b48b02f1c94f873c6655e7129910fc3b))
+
+## AI Usage
+
+Our group leveraged AI throughout the project process. There are very, if not no parts where AI not help in the completion of the project. Collective we touched tools like Cursor's AI IDE, Claude Code, Claude Opus 4.7, ChatGPT 5.3 & 5.4, Gemini 2.5, Gemini 2.0 Flash, VSCode with Codex extensions, and auto tab complete. We leveaged it from the project proposal idea clarifiation, code generation, documentation generation, debugging, planning, decision making, and more.

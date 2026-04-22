@@ -1,0 +1,44 @@
+========================================================================
+DATA DOCUMENTATION
+========================================================================
+
+COUNTS
+------------------------------------------------------------------------
+Number of per-second data points : 37,484,680
+Number of unique games           : 5,146
+
+DATE RANGE OF GAMES (by game start time)
+------------------------------------------------------------------------
+Earliest game start : 2025-11-03 16:07:11
+Latest game start   : 2026-03-14 21:41:28
+Span                : 131.23 days
+
+PERCENTAGE OF GAMES BY DAY OF WEEK (based on game start date)
+------------------------------------------------------------------------
+  Monday    :   158  (3.07%)
+  Tuesday   :   493  (9.58%)
+  Wednesday :   687  (13.35%)
+  Thursday  :   775  (15.06%)
+  Friday    :   649  (12.61%)
+  Saturday  :  1651  (32.08%)
+  Sunday    :   733  (14.24%)
+
+PERCENTAGE OF GAMES BY ENDING PERIOD
+------------------------------------------------------------------------
+  Regulation (ended in 2nd half) :  4864  (94.52%)
+  Overtime (any OT)              :   282  (5.48%)
+    - ended in OT1               :   236  (4.59%)
+    - ended in OT2               :    37  (0.72%)
+    - ended in OT3               :     9  (0.17%)
+
+AVERAGE GAME LENGTH
+------------------------------------------------------------------------
+  Bucket                     n   game-clock length                  real-world duration
+  All games               5146   2,417.5 sec (40.29 min)            7,283.2 sec (121.39 min)
+  Regulation only         4864   2,397.8 sec (39.96 min)            7,203.1 sec (120.05 min)
+  Overtime (any)           282   2,758.5 sec (45.97 min)            8,665.3 sec (144.42 min)
+  OT1 (ended in OT1)       236   2,700.0 sec (45.00 min)            8,455.6 sec (140.93 min)
+  OT2 (ended in OT2)        37   3,000.0 sec (50.00 min)            9,498.9 sec (158.31 min)
+  OT3 (ended in OT3)         9   3,300.0 sec (55.00 min)            10,738.1 sec (178.97 min)
+
+========================================================================

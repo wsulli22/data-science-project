@@ -1,0 +1,1 @@
+Copy and paste the week_#_games.csv files into this folder as described in the README.md
