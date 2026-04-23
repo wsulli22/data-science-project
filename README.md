@@ -70,4 +70,4 @@ ESPN Hidden API Endpoints ([link](https://gist.github.com/akeaswaran/b48b02f1c94
 
 ## AI Usage
 
-Our group leveraged AI throughout the project process. There are very, if not no parts where AI not help in the completion of the project. Collective we touched tools like Cursor's AI IDE, Claude Code, Claude Opus 4.7, ChatGPT 5.3 & 5.4, Gemini 2.5, Gemini 2.0 Flash, VSCode with Codex extensions, and auto tab complete. We leveaged it from the project proposal idea clarifiation, code generation, documentation generation, debugging, planning, decision making, and more.
+Our group used AI extensively throughout the entire project. In fact, there were very few parts of the process where AI did not play some role in helping us complete the work. Collectively, we used tools such as Cursor’s AI IDE, Claude Code, Claude Opus 4.7, ChatGPT 5.3 and 5.4, Gemini 2.5, Gemini 2.0 Flash, VS Code with Codex extensions, and AI-powered tab completion. We relied on these tools at many stages of the project, including clarifying the original project idea, generating and revising code, debugging, planning next steps, supporting decision-making, and helping draft documentation.
