@@ -34,7 +34,7 @@ Our dataset is comprised of 19 custom-created CSV files, each representing one w
 - **[*Data Gathering*]** `get_espn_game_timestamp_mapings.py` — fetch ESPN play-by-play and timestamp metadata used to align game clock to wall clock.  
 - **[*Data Gathering & Transformation*]** `fetch_and_merge_full_game_session_data.py/csv` — for each mapped pair, pull ESPN play-by-play and Kalshi candles, align timestamps, merge, and clean into the unified merged-game table (`all_games_merged_clean.csv` in `GeneratedDataFiles/` when the full run completes).  
 - **[*Preprocessing & Transformation*]** `build_weekly_data_files.py/csv` — read the merged clean file, interpolate to one row per real-world second per game, pivot both teams onto one row, split by calendar week; weekly files land in `0-Data/` as `week_<n>_games.csv`.  
-- **[*Preprocessing & Transformation*]** `runall.py` — end-to-end driver: refresh Kalshi/ESPN lists, rebuild mappings, fetch and merge all sessions, then rebuild weekly CSVs into `0-Data/`. Configuration at the top of the script sets the newest-game cutoff date, which games to include (`OVERTIME_GAMES`: all games vs overtime-only), and how many mappings to process. It may also invoke optional heatmap generators from `2-PreliminaryAnalysis` (`rawdata_heatmap`, `smoothed_heatmap`) when those modules are available on `sys.path`.
+- **[*Preprocessing & Transformation*]** `runall.py` — end-to-end driver: refresh Kalshi/ESPN lists, rebuild mappings, fetch and merge all sessions, then rebuild weekly CSVs into `0-Data/` via `create_per_second_weekly_files()`.
 
 #### `2-PreliminaryAnalysis/`
 
@@ -43,7 +43,8 @@ Our dataset is comprised of 19 custom-created CSV files, each representing one w
 
 #### `3-ThreeModels/A-Logistic-regression/`
 
-- **[*Modeling & Evaluation*]** `logistic_regression_empirical.py` — scikit-learn logistic regression that maps Kalshi quotes plus game-clock features to outcomes, with **GroupKFold** CV on games, a grouped holdout test split, and calibration diagnostics. Use `--data-dir` to point at the folder containing `week_*_games.csv` (typically repo `0-Data/`). Use `--feature-set` to choose `core_calibration` (logit, minute, interactions, half/OT indicators) vs `extended_market` (adds volume- and spread-style features). Artifacts default to `GeneratedDataFiles/logistic_regression/` (`--output-dir`); that includes `metrics_summary.json`, `cv_fold_metrics.csv`, `cv_summary.csv`, `test_metrics.csv`, `test_predictions.csv`, `model_coefficients.csv`, `model_calibration.csv`, `baseline_kalshi_calibration.csv`, and `holdout_calibration.png`.
+- **[*Modeling & Evaluation*]** `logistic_regression_empirical.py` — scikit-learn logistic regression that maps Kalshi quotes plus game-clock features to outcomes, with **GroupKFold** CV on games, a grouped holdout test split, and calibration diagnostics. Use `--data-dir` to point at the folder containing `week_*_games.csv` (use repo `0-Data/` after `build_weekly_data_files`; the script’s default path may not match every checkout). Use `--feature-set` to choose `core_calibration` (logit, minute, interactions, half/OT indicators) vs `extended_market` (adds volume- and spread-style features).  
+- **[*Modeling & Evaluation*]** **[Added based on professor presentation feedback]** `feature_sensitivity_and_stage_performance.py` — on the same grouped train/holdout split as the main model, runs **leave-one-feature-out feature ablation** and **feature-sensitivity** checks for both `core_calibration` and `extended_market` (holdout Brier / log loss / ROC-AUC vs the full model) plus **stage-of-game** metrics (early, halftime bands, late, overtime, etc.) comparing the fitted core model to the raw Kalshi baseline.
 
 #### `3-ThreeModels/B-GAM-based-smoothing/`
 
