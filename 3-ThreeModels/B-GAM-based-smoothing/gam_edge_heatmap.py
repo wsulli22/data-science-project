@@ -10,6 +10,7 @@ Requirements implemented:
   - Aggregate by minute (not second).
   - Do NOT drop zero-volume rows.
   - Save visualization directly in this folder.
+  - When run as __main__, also writes raw_edge_heatmap.png (same buckets, no GAM).
 """
 
 import os
@@ -96,25 +97,10 @@ def _load_all_predictionmodel_data(data_dir: str) -> pd.DataFrame:
     return long_df
 
 
-def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
-    input_data_dir: str = "../../0-Data",
-    num_time_bins: int = NUM_TIME_BINS_DEFAULT,
-    min_obs_per_cell: int = 2,
-    color_scale_percentile: float = 85.0,
-    output_filename: str = "gam_edge_heatmap.png",
+def _prepare_minute_grouped_signed_edge(
+    data_dir: str,
+    num_time_bins: int,
 ):
-    print("\nGENERATING SMOOTHED EDGE HEATMAP FROM 0-Data (MINUTE GROUPED)\n")
-
-    script_dir = os.path.dirname(__file__)
-    data_dir = (
-        input_data_dir
-        if os.path.isabs(input_data_dir)
-        else os.path.normpath(os.path.join(script_dir, input_data_dir))
-    )
-    # Save output image directly in this B-GAM-based-smoothing folder.
-    out_dir = script_dir
-    os.makedirs(out_dir, exist_ok=True)
-
     time_edges = np.linspace(0, TOTAL_SECONDS_TO_PLOT, num_time_bins + 1)
     time_labels = [f"{int(lo / 60)}-{int(hi / 60)} min" for lo, hi in zip(time_edges[:-1], time_edges[1:])]
     time_bin_to_frac = {
@@ -126,9 +112,7 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
 
     df = _load_all_predictionmodel_data(data_dir)
 
-    # Minute grouping (not second): collapse all points for the same game/team/minute.
     df["minute_bucket"] = (df["game_elapsed_seconds"].astype(float) // 60).astype(int)
-    # Include regulation and overtime through end of OT3.
     df = df[df["minute_bucket"].between(0, TOTAL_MINUTES_TO_PLOT - 1)]
     df = (
         df.groupby(["kalshi_event", "team", "minute_bucket"], observed=False, as_index=False)
@@ -163,6 +147,155 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
     count_matrix = grouped.pivot(index="prob_int", columns="time_bin", values="n")
     signed_raw = signed_raw.reindex(index=probs, columns=time_labels)
     count_matrix = count_matrix.reindex(index=probs, columns=time_labels, fill_value=0).astype(float)
+
+    return (
+        df,
+        signed_raw,
+        count_matrix,
+        time_labels,
+        probs,
+        time_edges,
+        num_time_bins,
+        time_bin_to_frac,
+        bin_centres_frac,
+    )
+
+
+def _plot_signed_edge_heatmap(
+    edge_values: pd.DataFrame,
+    count_matrix: pd.DataFrame,
+    time_labels,
+    probs,
+    num_time_bins: int,
+    min_obs_per_cell: int,
+    color_scale_percentile: float,
+    out_path: str,
+    title_line1: str,
+    title_line2: str,
+    cbar_label: str,
+    df: pd.DataFrame,
+):
+    mask = count_matrix < min_obs_per_cell
+
+    annot_matrix = edge_values.copy().astype(object)
+    for prob in edge_values.index:
+        for tb in time_labels:
+            n = int(count_matrix.loc[prob, tb])
+            val = edge_values.loc[prob, tb]
+            if pd.isna(val) or n < min_obs_per_cell:
+                annot_matrix.loc[prob, tb] = ""
+            else:
+                annot_matrix.loc[prob, tb] = f"{float(val):+.2f}% ({n})"
+
+    vals = edge_values.to_numpy()
+    m = mask.to_numpy()
+    vis = vals[~m & np.isfinite(vals)]
+    if vis.size:
+        vlim = float(np.nanpercentile(np.abs(vis), color_scale_percentile))
+    else:
+        vlim = 1.0
+    if vlim < 1e-6:
+        vlim = 1.0
+
+    cmap = _red_white_green_cmap()
+    norm = TwoSlopeNorm(vmin=-vlim, vcenter=0.0, vmax=vlim)
+
+    fig_width = max(24, 18 * (num_time_bins / 20))
+    fig, ax = plt.subplots(figsize=(fig_width, 28))
+
+    data_plot = edge_values.iloc[::-1]
+    mask_plot = mask.iloc[::-1]
+    annot_plot = annot_matrix.iloc[::-1]
+
+    sns.heatmap(
+        data_plot,
+        mask=mask_plot,
+        annot=annot_plot,
+        fmt="",
+        cmap=cmap,
+        norm=norm,
+        linewidths=0.3,
+        linecolor="white",
+        cbar_kws={
+            "label": cbar_label,
+            "shrink": 0.6,
+            "pad": 0.02,
+        },
+        ax=ax,
+        xticklabels=True,
+        annot_kws={"fontsize": 5.5, "fontweight": "bold", "color": "black"},
+    )
+
+    ax.set_facecolor("#d9d9d9")
+    divider_seconds = [
+        HALFTIME_SECONDS,
+        REGULATION_SECONDS,
+        REGULATION_SECONDS + OT_SECONDS,
+        REGULATION_SECONDS + (2 * OT_SECONDS),
+    ]
+    for boundary_seconds in divider_seconds:
+        divider_x = (boundary_seconds / float(TOTAL_SECONDS_TO_PLOT)) * num_time_bins
+        ax.axvline(x=divider_x, color="black", linewidth=3.5)
+
+    flipped_index = list(data_plot.index)
+    ytick_positions = []
+    ytick_labels = []
+    for i, prob in enumerate(flipped_index):
+        if prob % 5 == 0:
+            ytick_positions.append(i + 0.5)
+            ytick_labels.append(f"{prob}%")
+    ax.set_yticks(ytick_positions)
+    ax.set_yticklabels(ytick_labels, fontsize=10)
+
+    x_tick_positions = ax.get_xticks()
+    x_tick_labels = [label.get_text() for label in ax.get_xticklabels()]
+    label_step = max(1, int(round(num_time_bins / 10)))
+    ax.set_xticks(x_tick_positions[::label_step])
+    ax.set_xticklabels(x_tick_labels[::label_step], fontsize=11, rotation=0)
+
+    n_games = df["kalshi_event"].nunique()
+    n_obs = len(df)
+    ax.set_xlabel("Game Time (minutes elapsed)", fontsize=14, labelpad=12)
+    ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12)
+    ax.set_title(f"{title_line1}\n{title_line2}", fontsize=15, pad=16)
+
+    ax.tick_params(axis="x", labelsize=11, rotation=0)
+    ax.tick_params(axis="y", labelsize=10)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor="white", edgecolor="none")
+    plt.close()
+
+
+def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
+    input_data_dir: str = "../../0-Data",
+    num_time_bins: int = NUM_TIME_BINS_DEFAULT,
+    min_obs_per_cell: int = 2,
+    color_scale_percentile: float = 85.0,
+    output_filename: str = "gam_edge_heatmap.png",
+):
+    print("\nGENERATING SMOOTHED EDGE HEATMAP FROM 0-Data (MINUTE GROUPED)\n")
+
+    script_dir = os.path.dirname(__file__)
+    data_dir = (
+        input_data_dir
+        if os.path.isabs(input_data_dir)
+        else os.path.normpath(os.path.join(script_dir, input_data_dir))
+    )
+    out_dir = script_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    (
+        df,
+        signed_raw,
+        count_matrix,
+        time_labels,
+        probs,
+        _time_edges,
+        num_time_bins,
+        time_bin_to_frac,
+        bin_centres_frac,
+    ) = _prepare_minute_grouped_signed_edge(data_dir, num_time_bins)
 
     x_list, y_list, w_list = [], [], []
     for p in probs:
@@ -204,110 +337,80 @@ def generate_smoothed_data_edge_heat_map_predictionmodel_minute(
     z = gam.predict(grid).reshape(len(probs), num_time_bins)
     edge_smoothed = pd.DataFrame(z, index=probs, columns=time_labels)
 
-    mask = count_matrix < min_obs_per_cell
-
-    annot_matrix = edge_smoothed.copy().astype(object)
-    for prob in edge_smoothed.index:
-        for tb in time_labels:
-            n = int(count_matrix.loc[prob, tb])
-            val = edge_smoothed.loc[prob, tb]
-            if pd.isna(val) or n < min_obs_per_cell:
-                annot_matrix.loc[prob, tb] = ""
-            else:
-                annot_matrix.loc[prob, tb] = f"{float(val):+.2f}% ({n})"
-
-    vals = edge_smoothed.to_numpy()
-    m = mask.to_numpy()
-    vis = vals[~m & np.isfinite(vals)]
-    # Use a robust percentile for color limits so moderate edges become more visible.
-    # This increases visual contrast compared with scaling to the single max outlier.
-    if vis.size:
-        vlim = float(np.nanpercentile(np.abs(vis), color_scale_percentile))
-    else:
-        vlim = 1.0
-    if vlim < 1e-6:
-        vlim = 1.0
-
-    cmap = _red_white_green_cmap()
-    norm = TwoSlopeNorm(vmin=-vlim, vcenter=0.0, vmax=vlim)
-
-    fig_width = max(24, 18 * (num_time_bins / 20))
-    fig, ax = plt.subplots(figsize=(fig_width, 28))
-
-    data_plot = edge_smoothed.iloc[::-1]
-    mask_plot = mask.iloc[::-1]
-    annot_plot = annot_matrix.iloc[::-1]
-
-    sns.heatmap(
-        data_plot,
-        mask=mask_plot,
-        annot=annot_plot,
-        fmt="",
-        cmap=cmap,
-        norm=norm,
-        linewidths=0.3,
-        linecolor="white",
-        cbar_kws={
-            "label": "Signed edge (Empirical - Kalshi), percentage points",
-            "shrink": 0.6,
-            "pad": 0.02,
-        },
-        ax=ax,
-        xticklabels=True,
-        annot_kws={"fontsize": 5.5, "fontweight": "bold", "color": "black"},
-    )
-
-    ax.set_facecolor("#d9d9d9")
-    # Only structural verticals (no per-cell grid): halftime, end regulation, end OT1, end OT2.
-    divider_seconds = [
-        HALFTIME_SECONDS,
-        REGULATION_SECONDS,
-        REGULATION_SECONDS + OT_SECONDS,
-        REGULATION_SECONDS + (2 * OT_SECONDS),
-    ]
-    for boundary_seconds in divider_seconds:
-        divider_x = (boundary_seconds / float(TOTAL_SECONDS_TO_PLOT)) * num_time_bins
-        ax.axvline(x=divider_x, color="black", linewidth=3.5)
-
-    flipped_index = list(data_plot.index)
-    ytick_positions = []
-    ytick_labels = []
-    for i, prob in enumerate(flipped_index):
-        if prob % 5 == 0:
-            ytick_positions.append(i + 0.5)
-            ytick_labels.append(f"{prob}%")
-    ax.set_yticks(ytick_positions)
-    ax.set_yticklabels(ytick_labels, fontsize=10)
-
-    x_tick_positions = ax.get_xticks()
-    x_tick_labels = [label.get_text() for label in ax.get_xticklabels()]
-    label_step = max(1, int(round(num_time_bins / 10)))
-    ax.set_xticks(x_tick_positions[::label_step])
-    ax.set_xticklabels(x_tick_labels[::label_step], fontsize=11, rotation=0)
-
     n_games = df["kalshi_event"].nunique()
     n_obs = len(df)
-    ax.set_xlabel("Game Time (minutes elapsed)", fontsize=14, labelpad=12)
-    ax.set_ylabel("Kalshi Quoted Win Probability", fontsize=14, labelpad=12)
-    ax.set_title(
-        "Smoothed Signed Edge (All 0-Data files, minute-grouped through OT3)\n"
+    out_path = os.path.join(out_dir, output_filename)
+    _plot_signed_edge_heatmap(
+        edge_smoothed,
+        count_matrix,
+        time_labels,
+        probs,
+        num_time_bins,
+        min_obs_per_cell,
+        color_scale_percentile,
+        out_path,
+        "Smoothed Signed Edge (All 0-Data files, minute-grouped through OT3)",
         f"(red = Kalshi high vs outcomes, green = Kalshi low - {n_games} games - "
         f"{n_obs:,} minute-grouped observations - mask cells with n<{min_obs_per_cell})",
-        fontsize=15,
-        pad=16,
+        "Signed edge (Empirical - Kalshi), percentage points",
+        df,
     )
-
-    ax.tick_params(axis="x", labelsize=11, rotation=0)
-    ax.tick_params(axis="y", labelsize=10)
-
-    plt.tight_layout()
-
-    out_path = os.path.join(out_dir, output_filename)
-    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor="white", edgecolor="none")
-    plt.close()
     print(f"Saved {output_filename} -> {out_path}")
     return edge_smoothed
 
 
+def generate_raw_data_edge_heat_map_predictionmodel_minute(
+    input_data_dir: str = "../../0-Data",
+    num_time_bins: int = NUM_TIME_BINS_DEFAULT,
+    min_obs_per_cell: int = 2,
+    color_scale_percentile: float = 85.0,
+    output_filename: str = "raw_edge_heatmap.png",
+):
+    print("\nGENERATING NON-SMOOTHED (RAW) EDGE HEATMAP FROM 0-Data (MINUTE GROUPED)\n")
+
+    script_dir = os.path.dirname(__file__)
+    data_dir = (
+        input_data_dir
+        if os.path.isabs(input_data_dir)
+        else os.path.normpath(os.path.join(script_dir, input_data_dir))
+    )
+    out_dir = script_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    (
+        df,
+        signed_raw,
+        count_matrix,
+        time_labels,
+        probs,
+        _time_edges,
+        num_time_bins,
+        _time_bin_to_frac,
+        _bin_centres_frac,
+    ) = _prepare_minute_grouped_signed_edge(data_dir, num_time_bins)
+
+    n_games = df["kalshi_event"].nunique()
+    n_obs = len(df)
+    out_path = os.path.join(out_dir, output_filename)
+    _plot_signed_edge_heatmap(
+        signed_raw,
+        count_matrix,
+        time_labels,
+        probs,
+        num_time_bins,
+        min_obs_per_cell,
+        color_scale_percentile,
+        out_path,
+        "Raw (Non-Smoothed) Signed Edge (All 0-Data files, minute-grouped through OT3)",
+        f"(cell values = empirical win % minus quoted prob - {n_games} games - "
+        f"{n_obs:,} minute-grouped observations - mask cells with n<{min_obs_per_cell})",
+        "Signed edge (Empirical - Kalshi), percentage points",
+        df,
+    )
+    print(f"Saved {output_filename} -> {out_path}")
+    return signed_raw
+
+
 if __name__ == "__main__":
     generate_smoothed_data_edge_heat_map_predictionmodel_minute()
+    generate_raw_data_edge_heat_map_predictionmodel_minute()

@@ -1,37 +1,28 @@
 """
-baseline.py — Simple "always bet the pre-game favorite" benchmark.
+baseline.py — Benchmark: always bet the team favored at game start (opening line).
 
-PURPOSE
--------
-Provides a straightforward gambling-style benchmark to compare against the
-targeted strategy in ``algorithm_with_testing.py``. For every game we:
+Uses the same weekly CSVs, fee model, settlement buffer, and leave-one-week-out
+test weeks (3–19) as ``algorithm_with_testing.py``.
 
-  1. Open a position on the team with the higher win probability at the first
-     available timestamp (the pre-game / tip-off favorite).
-  2. Pay Kalshi taker buy-side fees (identical to the main algorithm).
-  3. Hold to settlement — no selling, no cash-out penalty (mirrors the main
-     algorithm, which is also buy-and-hold).
+Two variants for comparison with the targeted strategy:
+  * **Fixed** — each intended bet uses a flat percentage of the *starting* weekly
+    bankroll (default 10%), subject to the usual per-bet budget / fee sizing.
+  * **Dynamic** — fractional Kelly sizing from the empirical win-rate surface
+    (all training weeks except the test week), capped as a % of starting
+    bankroll, using the same ``compute_bet_size`` logic as the optimiser (positive
+    edge required when a calibrated ``p_true`` is available). By default
+    ``flat_bet_pct`` is 0 in this mode so games with no ``p_true`` are skipped;
+    pass ``--dynamic-flat-fallback-pct 10`` to allow a flat stake when the surface
+    lookup cannot supply ``p_true``.
 
-Two bet-sizing variants are evaluated side-by-side:
-
-  * FIXED    — flat ``FIXED_BET_PCT`` % of the starting bankroll per game.
-  * DYNAMIC  — risk-adjusted half-Kelly sizing that uses the leave-one-week-out
-               empirical win-rate surface (same surface the main algorithm uses)
-               to estimate the favorite's true win probability, then sizes the
-               bet proportional to the edge. Falls back to the fixed bet when
-               the surface shows no positive edge.
-
-Testing follows the same leave-one-week-out walk-forward schedule as
-``algorithm_with_testing.py`` (test weeks 3–19). Bankroll is $1000 and resets
-each week; bets settle with a 2-hour buffer after the final timestamp.
-
-USAGE
------
-    python baseline.py
+Run from ``4-BettingAlgorithm/``:
+  python baseline.py
+  python baseline.py --fixed-flat-pct 10 --dynamic-kelly 0.5 --dynamic-cap 20
 """
 
 from __future__ import annotations
 
+import argparse
 import time
 from datetime import timedelta
 from heapq import heappop, heappush
@@ -44,79 +35,77 @@ from algorithm_with_testing import (
     DATA_DIRECTORY,
     MIN_TRAIN_WEEKS,
     NUM_WEEKS,
-    SETTLEMENT_BUFFER_SECONDS,
     STARTING_BANKROLL,
+    SETTLEMENT_BUFFER_SECONDS,
     _buy,
     _usd2,
     build_surface_excluding_week,
+    compute_bet_size,
     load_and_preprocess_weeks,
     lookup_true_win_prob,
     precompute_week_contributions,
 )
 
 
-# ── Baseline-specific bet-sizing knobs ────────────────────────────────────────
-
-FIXED_BET_PCT  = 5.0     # % of starting bankroll per bet in the fixed variant
-KELLY_FRACTION = 0.5     # half-Kelly for the dynamic variant
-KELLY_CAP_PCT  = 20.0    # hard ceiling on bet size (% of starting bankroll)
-
-
-# ── Pick the pre-game favorite for one game ───────────────────────────────────
-
-def pick_starting_favorite(game: dict) -> Optional[dict]:
-    """Return a bet dict for the first timestamp of the game.
-
-    The favored team is the one with the higher probability at that timestamp
-    (ties break toward team_1). Returns None if the game has no rows.
+def opening_favorite_bet(
+    game: dict,
+    surface: Optional[np.ndarray],
+    params: dict,
+) -> Optional[dict]:
+    """
+    One bet per game: the team with higher Kalshi win % at the earliest observed
+    game-clock row (minimum ``game_elapsed_seconds``). True 50–50 openings skip.
     """
     p1 = game["p1"]
     p2 = game["p2"]
-    if len(p1) == 0:
+    elapsed = game["elapsed"]
+    n = len(p1)
+    if n == 0:
         return None
 
-    p1_0 = float(p1[0])
-    p2_0 = float(p2[0])
-    elapsed_0 = float(game["elapsed"][0])
-    ts_0 = pd.Timestamp(game["ts"][0])
+    i = int(np.argmin(elapsed))
+    t1p, t2p = float(p1[i]), float(p2[i])
 
-    if p1_0 >= p2_0:
-        bet_team, bet_prob = game["team_1"], p1_0
+    if t1p > t2p:
+        bet_team, bet_prob = game["team_1"], t1p
+    elif t2p > t1p:
+        bet_team, bet_prob = game["team_2"], t2p
     else:
-        bet_team, bet_prob = game["team_2"], p2_0
+        return None
+
+    p_kalshi_frac = bet_prob / 100.0
+    p_true: Optional[float] = None
+    if params["kelly_fraction"] > 0.0 and surface is not None:
+        p_true = lookup_true_win_prob(surface, bet_prob, float(elapsed[i]))
+
+    bet_size = compute_bet_size(p_true, p_kalshi_frac, params)
+    if bet_size <= 0.0:
+        return None
 
     return {
-        "event_id":    game["event_id"],
-        "bet_ts":      ts_0,
+        "event_id": game["event_id"],
+        "bet_ts": pd.Timestamp(game["ts"][i]),
         "game_end_ts": pd.Timestamp(game["game_end"]),
-        "bet_team":    bet_team,
-        "prob_pct":    bet_prob,
-        "winner":      game["winner"],
-        "elapsed_s":   elapsed_0,
+        "bet_team": bet_team,
+        "prob_pct": bet_prob,
+        "winner": game["winner"],
+        "p_true": p_true,
+        "bet_size": bet_size,
     }
 
 
-# ── Weekly simulator ──────────────────────────────────────────────────────────
-
 def simulate_week_baseline(
     week_games: list[dict],
-    mode: str,
-    surface: Optional[np.ndarray] = None,
+    surface: Optional[np.ndarray],
+    params: dict,
 ) -> dict:
-    """Simulate one week of the baseline strategy.
-
-    Parameters
-    ----------
-    week_games : list[dict]
-        Output of ``load_and_preprocess_weeks`` for a single week.
-    mode : {"fixed", "dynamic"}
-        Bet-sizing rule.
-    surface : np.ndarray or None
-        Required when ``mode == "dynamic"``; supplies p_true estimates for Kelly.
+    """
+    Same FIFO bankroll + 2-hour settlement queue as ``simulate_week`` in the
+    main optimiser, but every game uses at most one opening-favorite bet.
     """
     candidates: list[dict] = []
     for game in week_games:
-        bet = pick_starting_favorite(game)
+        bet = opening_favorite_bet(game, surface, params)
         if bet is not None:
             candidates.append(bet)
 
@@ -128,37 +117,13 @@ def simulate_week_baseline(
     total_profit = 0.0
     team_won_bets = 0
     sum_return_multiple = 0.0
-    fixed_target = (FIXED_BET_PCT / 100.0) * STARTING_BANKROLL
-    kelly_cap = (KELLY_CAP_PCT / 100.0) * STARTING_BANKROLL
 
     for bet in candidates:
         while pending and pending[0][0] <= bet["bet_ts"]:
             _, payout, _ = heappop(pending)
             bankroll += payout
 
-        p_kalshi_frac = bet["prob_pct"] / 100.0
-
-        if mode == "fixed":
-            target = fixed_target
-        elif mode == "dynamic":
-            target = fixed_target  # fallback when no edge is detected
-            if surface is not None and p_kalshi_frac < 1.0:
-                p_true = lookup_true_win_prob(
-                    surface, bet["prob_pct"], bet["elapsed_s"]
-                )
-                if p_true is not None and p_true > p_kalshi_frac:
-                    edge = p_true - p_kalshi_frac
-                    f_star = edge / (1.0 - p_kalshi_frac)
-                    target = KELLY_FRACTION * f_star * STARTING_BANKROLL
-            target = min(target, kelly_cap)
-        else:
-            raise ValueError(f"unknown mode: {mode!r}")
-
-        if target <= 0.0:
-            skipped += 1
-            continue
-
-        stake, fee, contracts = _buy(target, p_kalshi_frac)
+        stake, fee, contracts = _buy(bet["bet_size"], bet["prob_pct"] / 100.0)
         total_cost = _usd2(stake + fee)
 
         if contracts <= 0 or total_cost > bankroll:
@@ -177,6 +142,7 @@ def simulate_week_baseline(
             wins += 1
         else:
             losses += 1
+
         if bet["bet_team"] == bet["winner"]:
             team_won_bets += 1
         if total_cost > 0:
@@ -187,37 +153,52 @@ def simulate_week_baseline(
         bankroll += payout
 
     return {
-        "games":               len(week_games),
-        "profit":              bankroll - STARTING_BANKROLL,
-        "bets":                total_bets,
-        "wins":                wins,
-        "losses":              losses,
-        "skipped":             skipped,
-        "final_bank":          bankroll,
-        "team_won_bets":       team_won_bets,
+        "games": len(week_games),
+        "games_with_opportunity": len(candidates),
+        "profit": bankroll - STARTING_BANKROLL,
+        "bets": total_bets,
+        "wins": wins,
+        "losses": losses,
+        "skipped": skipped,
+        "final_bank": bankroll,
+        "team_won_bets": team_won_bets,
         "sum_return_multiple": sum_return_multiple,
     }
 
 
-# ── Leave-one-week-out driver ─────────────────────────────────────────────────
+def _params_fixed(flat_bet_pct: float) -> dict:
+    return {
+        "kelly_fraction": 0.0,
+        "kelly_cap_pct": 100.0,
+        "flat_bet_pct": flat_bet_pct,
+    }
 
-def run_baseline(
-    mode: str,
+
+def _params_dynamic(kelly_fraction: float, kelly_cap_pct: float, flat_bet_pct: float) -> dict:
+    return {
+        "kelly_fraction": kelly_fraction,
+        "kelly_cap_pct": kelly_cap_pct,
+        "flat_bet_pct": flat_bet_pct,
+    }
+
+
+def run_leave_one_week_out(
+    label: str,
     all_weeks: list[list[dict]],
-    contributions: Optional[list[tuple[np.ndarray, np.ndarray]]],
+    contributions: list,
+    params: dict,
+    bet_rule_line: str,
 ) -> dict:
-    """Run test weeks 3..19 and print a per-week breakdown."""
     first_test_week = MIN_TRAIN_WEEKS + 1
-
     total_profit = 0.0
     total_games = total_bets = total_wins = total_losses = 0
     total_team_won_bets = 0
     total_sum_return_multiple = 0.0
+    per_week: list[tuple[int, dict]] = []
 
-    label = "FIXED" if mode == "fixed" else "DYNAMIC (Kelly)"
-    print("\n" + "=" * 72)
+    print(f"\n{'=' * 72}")
     print(f"BASELINE — always bet starting favorite [{label}]")
-    print("=" * 72)
+    print(f"{'=' * 72}")
     print(
         f"{'Week':>4}  {'Games':>5}  {'Bets':>4}  {'W':>4}  {'L':>4}  "
         f"{'Acc%':>6}  {'ROI/G all%':>10}  {'ROI/G bet%':>10}  {'Profit':>10}"
@@ -226,46 +207,49 @@ def run_baseline(
 
     for test_week_num in range(first_test_week, NUM_WEEKS + 1):
         test_idx = test_week_num - 1
-        if mode == "dynamic":
-            assert contributions is not None, "dynamic mode needs contributions"
-            surface = build_surface_excluding_week(contributions, test_idx)
-        else:
-            surface = None
-        week_games = all_weeks[test_idx]
-        r = simulate_week_baseline(week_games, mode, surface)
+        surface = build_surface_excluding_week(contributions, test_idx)
+        week_games = all_weeks[test_week_num - 1]
+        r = simulate_week_baseline(week_games, surface, params)
 
         win_pct = 100.0 * r["wins"] / r["bets"] if r["bets"] > 0 else 0.0
-        roi_all = (
+        roi_per_game_all = (
             (r["profit"] / STARTING_BANKROLL) * 100.0 / r["games"]
-            if r["games"] > 0 else 0.0
+            if r["games"] > 0
+            else 0.0
         )
-        roi_bet = (
+        roi_per_game_bet = (
             (r["profit"] / STARTING_BANKROLL) * 100.0 / r["bets"]
-            if r["bets"] > 0 else 0.0
+            if r["bets"] > 0
+            else 0.0
         )
 
         total_profit += r["profit"]
-        total_games  += r["games"]
-        total_bets   += r["bets"]
-        total_wins   += r["wins"]
+        total_games += r["games"]
+        total_bets += r["bets"]
+        total_wins += r["wins"]
         total_losses += r["losses"]
         total_team_won_bets += r["team_won_bets"]
         total_sum_return_multiple += r["sum_return_multiple"]
+        per_week.append((test_week_num, r))
 
         print(
             f"{test_week_num:>4}  {r['games']:>5}  {r['bets']:>4}  {r['wins']:>4}  {r['losses']:>4}  "
-            f"{win_pct:>5.1f}%  {roi_all:>9.3f}%  {roi_bet:>9.3f}%  ${r['profit']:>9.2f}"
+            f"{win_pct:>5.1f}%  {roi_per_game_all:>9.3f}%  {roi_per_game_bet:>9.3f}%  "
+            f"${r['profit']:>9.2f}"
         )
 
-    overall_win_pct = 100.0 * total_wins / total_bets if total_bets else 0.0
+    overall_win_pct = 100.0 * total_wins / total_bets if total_bets > 0 else 0.0
     overall_roi_all = (
         (total_profit / STARTING_BANKROLL) * 100.0 / total_games
-        if total_games else 0.0
+        if total_games > 0
+        else 0.0
     )
     overall_roi_bet = (
         (total_profit / STARTING_BANKROLL) * 100.0 / total_bets
-        if total_bets else 0.0
+        if total_bets > 0
+        else 0.0
     )
+
     print("-" * 72)
     print(
         f"{'TOT':>4}  {total_games:>5}  {total_bets:>4}  {total_wins:>4}  {total_losses:>4}  "
@@ -274,17 +258,13 @@ def run_baseline(
     )
 
     n_test_weeks = NUM_WEEKS - first_test_week + 1
-    avg_profit = total_profit / n_test_weeks if n_test_weeks else 0.0
-    roi_bank = (total_profit / (STARTING_BANKROLL * n_test_weeks)) * 100 if n_test_weeks else 0.0
-
-    rule = (
-        f"flat {FIXED_BET_PCT:.1f}% of starting bankroll"
-        if mode == "fixed"
-        else f"{KELLY_FRACTION:.2f}-Kelly via LOO surface, capped at {KELLY_CAP_PCT:.1f}%"
-    )
+    avg_profit = total_profit / n_test_weeks if n_test_weeks > 0 else 0.0
+    roi_bankroll = (total_profit / (STARTING_BANKROLL * n_test_weeks)) * 100.0
+    pick_win_pct = 100.0 * total_team_won_bets / total_bets if total_bets > 0 else 0.0
+    avg_mult = total_sum_return_multiple / total_bets if total_bets > 0 else 0.0
 
     print(f"\n── {label} baseline summary ─────────────────────────────")
-    print(f"  Bet-size rule        : {rule}")
+    print(f"  Bet-size rule        : {bet_rule_line}")
     print(f"  Test weeks evaluated : {n_test_weeks}")
     print(f"  Total games observed : {total_games}")
     print(f"  Total bets placed    : {total_bets}")
@@ -293,32 +273,61 @@ def run_baseline(
     print(f"  Avg ROI per game (bets only) : {overall_roi_bet:.3f}%")
     print(f"  Total profit         : ${total_profit:.2f}")
     print(f"  Average weekly profit: ${avg_profit:.2f}")
-    print(f"  ROI on bankroll      : {roi_bank:.2f}%")
-    if total_bets > 0:
-        avg_mult = total_sum_return_multiple / total_bets
-        pick_win_pct = 100.0 * total_team_won_bets / total_bets
-        print(f"  Pick win rate        : {pick_win_pct:.1f}%")
-        print(f"  Avg return multiple  : {avg_mult:.2f}x")
+    print(f"  ROI on bankroll      : {roi_bankroll:.2f}%")
+    print(f"  Pick win rate        : {pick_win_pct:.1f}%")
+    print(f"  Avg return multiple  : {avg_mult:.2f}x")
 
     return {
-        "mode":               mode,
-        "label":              label,
-        "rule":               rule,
-        "total_profit":       total_profit,
-        "total_bets":         total_bets,
-        "total_games":        total_games,
-        "wins":               total_wins,
-        "losses":             total_losses,
-        "win_pct":            overall_win_pct,
-        "roi_pct":            roi_bank,
-        "avg_weekly_profit":  avg_profit,
+        "label": label,
+        "bet_rule_line": bet_rule_line,
+        "total_profit": total_profit,
+        "total_bets": total_bets,
+        "overall_win_pct": overall_win_pct,
+        "roi_bankroll_pct": roi_bankroll,
+        "per_week": per_week,
     }
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Baseline: bet the opening favorite every game (fixed vs Kelly sizing)."
+    )
+    p.add_argument(
+        "--fixed-flat-pct",
+        type=float,
+        default=10.0,
+        help="Fixed mode: bet size as %% of starting weekly bankroll (default 10).",
+    )
+    p.add_argument(
+        "--dynamic-kelly",
+        type=float,
+        default=0.5,
+        help="Dynamic mode: Kelly fraction weight on f* (default 0.5).",
+    )
+    p.add_argument(
+        "--dynamic-cap",
+        type=float,
+        default=20.0,
+        help="Dynamic mode: max %% of starting bankroll per bet (default 20).",
+    )
+    p.add_argument(
+        "--dynamic-flat-fallback-pct",
+        type=float,
+        default=0.0,
+        help=(
+            "Passed as ``flat_bet_pct`` while Kelly is on: when no calibrated "
+            "p_true is available, ``compute_bet_size`` uses this %% of starting "
+            "bankroll (default 0 = skip those games; set e.g. 10 to mirror the "
+            "optimizer’s flat fallback when the surface cell is empty)."
+        ),
+    )
+    return p.parse_args()
+
 
 def main() -> None:
+    args = _parse_args()
     t0 = time.perf_counter()
+
     print("=" * 72)
     print("BASELINE EVALUATOR — bet the pre-game favorite on every game")
     print("=" * 72)
@@ -331,31 +340,51 @@ def main() -> None:
     print("  Done.")
 
     print("\n[3/3] Running baseline strategies (leave-one-week-out, weeks 3–19) …")
-    fixed_res   = run_baseline("fixed",   all_weeks, contributions=None)
-    dynamic_res = run_baseline("dynamic", all_weeks, contributions=contributions)
 
-    print("\n" + "=" * 72)
-    print("HEAD-TO-HEAD COMPARISON (baseline variants)")
-    print("=" * 72)
-    print(
-        f"  {'Variant':<28}  {'Bets':>5}  {'Win%':>6}  {'Profit':>11}  {'ROI':>7}"
+    fixed_params = _params_fixed(args.fixed_flat_pct)
+    fixed_rule = f"flat {args.fixed_flat_pct:.1f}% of starting bankroll"
+    fixed_summary = run_leave_one_week_out(
+        "FIXED", all_weeks, contributions, fixed_params, fixed_rule
     )
+
+    dyn_params = _params_dynamic(
+        args.dynamic_kelly,
+        args.dynamic_cap,
+        args.dynamic_flat_fallback_pct,
+    )
+    dyn_rule = (
+        f"{args.dynamic_kelly:.2f}-Kelly via LOO surface, capped at {args.dynamic_cap:.1f}%"
+    )
+    if args.dynamic_flat_fallback_pct > 0:
+        dyn_rule += f"; flat fallback {args.dynamic_flat_fallback_pct:.1f}% if no p_true"
+    dynamic_summary = run_leave_one_week_out(
+        "DYNAMIC (Kelly)", all_weeks, contributions, dyn_params, dyn_rule
+    )
+
+    print(f"\n{'=' * 72}")
+    print("HEAD-TO-HEAD COMPARISON (baseline variants)")
+    print(f"{'=' * 72}")
+    print(f"  {'Variant':<30}  {'Bets':>6}  {'Win%':>8}  {'Profit':>12}  {'ROI':>8}")
     print("  " + "-" * 64)
-    for r in (fixed_res, dynamic_res):
-        nice_label = (
-            f"Fixed  ({FIXED_BET_PCT:.1f}% flat)"
-            if r["mode"] == "fixed"
-            else f"Dynamic ({KELLY_FRACTION:.2f}-Kelly)"
-        )
-        print(
-            f"  {nice_label:<28}  {r['total_bets']:>5}  {r['win_pct']:>5.1f}%  "
-            f"${r['total_profit']:>9.2f}  {r['roi_pct']:>6.2f}%"
-        )
+    print(
+        f"  {'Fixed  (' + f'{args.fixed_flat_pct:.1f}% flat)':<30}  "
+        f"{fixed_summary['total_bets']:>6}  "
+        f"{fixed_summary['overall_win_pct']:>7.1f}%  "
+        f"${fixed_summary['total_profit']:>10.2f}  "
+        f"{fixed_summary['roi_bankroll_pct']:>7.2f}%"
+    )
+    print(
+        f"  {'Dynamic (' + f'{args.dynamic_kelly:.2f}-Kelly)':<30}  "
+        f"{dynamic_summary['total_bets']:>6}  "
+        f"{dynamic_summary['overall_win_pct']:>7.1f}%  "
+        f"${dynamic_summary['total_profit']:>10.2f}  "
+        f"{dynamic_summary['roi_bankroll_pct']:>7.2f}%"
+    )
 
     elapsed = time.perf_counter() - t0
     if elapsed >= 60:
-        mins, secs = divmod(elapsed, 60)
-        print(f"\n── Total wall time: {int(mins)}m {secs:.1f}s ({elapsed:.2f}s)")
+        m, s = divmod(elapsed, 60)
+        print(f"\n── Total wall time: {int(m)}m {s:.2f}s ({elapsed:.2f}s)")
     else:
         print(f"\n── Total wall time: {elapsed:.2f}s")
 
